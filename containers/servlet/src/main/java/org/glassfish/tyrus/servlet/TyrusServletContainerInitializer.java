@@ -40,12 +40,16 @@
 
 package org.glassfish.tyrus.servlet;
 
+import org.glassfish.tyrus.server.ServerContainerFactory;
+import org.glassfish.tyrus.server.TyrusServerContainer;
+
 import java.util.HashSet;
 import java.util.Set;
 import java.util.logging.Logger;
 
 import javax.websocket.Endpoint;
 import javax.websocket.server.ServerApplicationConfig;
+import javax.websocket.server.ServerContainer;
 import javax.websocket.server.ServerEndpoint;
 
 import javax.servlet.FilterRegistration;
@@ -53,6 +57,7 @@ import javax.servlet.ServletContainerInitializer;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.annotation.HandlesTypes;
+import javax.websocket.server.ServerEndpointConfig;
 
 /**
  * Registers a filter for upgrade handshake.
@@ -81,7 +86,6 @@ public class TyrusServletContainerInitializer implements ServletContainerInitial
 
         classes.removeAll(FILTERED_CLASSES);
         TyrusServletFilter filter = ctx.createFilter(TyrusServletFilter.class);
-        filter.setClasses(classes);
 
         // HttpSessionListener registration
         ctx.addListener(filter);
@@ -92,7 +96,9 @@ public class TyrusServletContainerInitializer implements ServletContainerInitial
         reg.addMappingForUrlPatterns(null, true, "/*");
         LOGGER.info("Registering WebSocket filter for url pattern /*");
 
-        final TyrusServletServerContainer serverContainer = new TyrusServletServerContainer(filter);
-        ctx.setAttribute(TyrusServletServerContainer.SERVER_CONTAINER_ATTRIBUTE, serverContainer);
+        final TyrusServerContainer serverContainer = ServerContainerFactory.create(
+                ServletContainer.class, ctx.getContextPath(), 8080, classes,
+                new HashSet<Class<?>>(), new HashSet<ServerEndpointConfig>());
+        ctx.setAttribute(ServerContainer.class.getName(), serverContainer);
     }
 }
