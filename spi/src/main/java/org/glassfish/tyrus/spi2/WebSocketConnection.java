@@ -43,12 +43,12 @@ package org.glassfish.tyrus.spi2;
 import java.io.Closeable;
 
 // Tyrus creates WebSocketConnection implementation and connectors
-// call set ProtocolReader, ProtocolWriter and Closeable impl
+// call get ProtocolReader,  and set ProtocolWriter and Closeable impl
 public interface WebSocketConnection {
 
     String getPath();
 
-    void setProtocolReader(ProtocolReader reader);
+    ProtocolReader getProtocolReader();
 
     void setProtocolWriter(ProtocolWriter writer);
 

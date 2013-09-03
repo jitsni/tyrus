@@ -48,10 +48,10 @@ public interface ServerContainer {
     // 1. servlet, grizzly or fallback connectors implement UpgradeRequest,
     // UpgradeResponse and call this method.
     // 2. Tyrus creates WebSocketConnection
-    // 3. connectors set the ProtocolReader, ProtocolWriter on the WebSocketConnection
+    // 3. connectors get the ProtocolReader, and set ProtocolWriter on the WebSocketConnection
     WebSocketConnection upgrade(UpgradeRequest req, UpgradeResponse res);
 
-    // Servlet, grizzly or fallback connectors unregister when the connection
-    // is broken etc
+    // Servlet, grizzly or fallback connectors unregister(when the connection
+    // is broken etc)
     void unregister(WebSocketConnection connection);
 }
