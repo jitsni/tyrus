@@ -40,6 +40,7 @@
 
 package org.glassfish.tyrus.core;
 
+import java.nio.ByteBuffer;
 import java.util.EnumSet;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -47,13 +48,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.glassfish.tyrus.websockets.ClosingDataFrame;
-import org.glassfish.tyrus.websockets.DataFrame;
-import org.glassfish.tyrus.websockets.ProtocolHandler;
-import org.glassfish.tyrus.websockets.WebSocket;
-import org.glassfish.tyrus.websockets.WebSocketListener;
-import org.glassfish.tyrus.websockets.frame.PingFrame;
-import org.glassfish.tyrus.websockets.frame.PongFrame;
+import javax.websocket.CloseReason;
+import javax.websocket.SendHandler;
+
+import org.glassfish.tyrus.core.frame.PingFrame;
+import org.glassfish.tyrus.core.frame.PongFrame;
+import org.glassfish.tyrus.spi.UpgradeRequest;
 
 /**
  * Tyrus implementation of {@link WebSocket}.
@@ -108,14 +108,14 @@ public class TyrusWebSocket implements WebSocket {
     }
 
     @Override
-    public void onClose(final ClosingDataFrame frame) {
+    public void onClose(final CloseReason closeReason) {
         WebSocketListener listener;
         while ((listener = listeners.poll()) != null) {
-            listener.onClose(this, frame);
+            listener.onClose(this, closeReason);
         }
 
         if (state.compareAndSet(State.CONNECTED, State.CLOSING)) {
-            protocolHandler.close(frame.getCode(), frame.getReason());
+            protocolHandler.close(closeReason.getCloseCode().getCode(), closeReason.getReasonPhrase());
         } else {
             state.set(State.CLOSED);
             protocolHandler.doClose();
@@ -123,11 +123,11 @@ public class TyrusWebSocket implements WebSocket {
     }
 
     @Override
-    public void onConnect() {
+    public void onConnect(UpgradeRequest upgradeRequest) {
         state.set(State.CONNECTED);
 
         for (WebSocketListener listener : listeners) {
-            listener.onConnect(this);
+            listener.onConnect(this, upgradeRequest);
         }
 
         onConnectLatch.countDown();
@@ -183,7 +183,7 @@ public class TyrusWebSocket implements WebSocket {
 
     @Override
     public void close() {
-        close(NORMAL_CLOSURE, null);
+        close(CloseReason.CloseCodes.NORMAL_CLOSURE.getCode(), null);
     }
 
     @Override
@@ -203,9 +203,36 @@ public class TyrusWebSocket implements WebSocket {
     }
 
     @Override
+    public void send(byte[] data, SendHandler handler) {
+        if (isConnected()) {
+            protocolHandler.send(data, handler);
+        } else {
+            throw new RuntimeException("Socket is not connected.");
+        }
+    }
+
+    @Override
     public Future<DataFrame> send(String data) {
         if (isConnected()) {
             return protocolHandler.send(data);
+        } else {
+            throw new RuntimeException("Socket is not connected.");
+        }
+    }
+
+    @Override
+    public void send(String data, SendHandler handler) {
+        if (isConnected()) {
+            protocolHandler.send(data, handler);
+        } else {
+            throw new RuntimeException("Socket is not connected");
+        }
+    }
+
+    @Override
+    public Future<DataFrame> sendRawFrame(ByteBuffer data) {
+        if (isConnected()) {
+            return protocolHandler.sendRawFrame(data);
         } else {
             throw new RuntimeException("Socket is not connected.");
         }
@@ -254,5 +281,9 @@ public class TyrusWebSocket implements WebSocket {
         } else {
             throw new RuntimeException("Socket is not connected.");
         }
+    }
+
+    ProtocolHandler getProtocolHandler() {
+        return protocolHandler;
     }
 }

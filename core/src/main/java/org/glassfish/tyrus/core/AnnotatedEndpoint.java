@@ -92,7 +92,6 @@ public class AnnotatedEndpoint extends Endpoint {
     private final ParameterExtractor[] onCloseParameters;
     private final ParameterExtractor[] onErrorParameters;
     private final EndpointConfig configuration;
-    private final ErrorCollector collector;
     private final ComponentProviderService componentProvider;
 
     private final Set<MessageHandlerFactory> messageHandlerFactories = new HashSet<MessageHandlerFactory>();
@@ -105,9 +104,8 @@ public class AnnotatedEndpoint extends Endpoint {
      * @param isServerEndpoint  {@code true} iff annotated endpoint is deployed on server side.
      * @param collector         error collector.
      * @return new instance.
-     * @throws DeploymentException TODO remove
      */
-    public static AnnotatedEndpoint fromClass(Class<?> annotatedClass, ComponentProviderService componentProvider, boolean isServerEndpoint, ErrorCollector collector) throws DeploymentException {
+    public static AnnotatedEndpoint fromClass(Class<?> annotatedClass, ComponentProviderService componentProvider, boolean isServerEndpoint, ErrorCollector collector) {
         return new AnnotatedEndpoint(annotatedClass, null, componentProvider, isServerEndpoint, collector);
     }
 
@@ -119,21 +117,19 @@ public class AnnotatedEndpoint extends Endpoint {
      * @param isServerEndpoint  {@code true} iff annotated endpoint is deployed on server side.
      * @param collector         error collector.
      * @return new instance.
-     * @throws DeploymentException TODO remove
      */
-    public static AnnotatedEndpoint fromInstance(Object annotatedInstance, ComponentProviderService componentProvider, boolean isServerEndpoint, ErrorCollector collector) throws DeploymentException {
+    public static AnnotatedEndpoint fromInstance(Object annotatedInstance, ComponentProviderService componentProvider, boolean isServerEndpoint, ErrorCollector collector) {
         return new AnnotatedEndpoint(annotatedInstance.getClass(), annotatedInstance, componentProvider, isServerEndpoint, collector);
     }
 
-    private AnnotatedEndpoint(Class<?> annotatedClass, Object instance, ComponentProviderService componentProvider, Boolean isServerEndpoint, ErrorCollector collector) throws DeploymentException {
-        this.collector = collector;
-        this.configuration = createEndpointConfig(annotatedClass, isServerEndpoint);
+    private AnnotatedEndpoint(Class<?> annotatedClass, Object instance, ComponentProviderService componentProvider, Boolean isServerEndpoint, ErrorCollector collector) {
+        this.configuration = createEndpointConfig(annotatedClass, isServerEndpoint, collector);
         this.annotatedInstance = instance;
         this.annotatedClass = annotatedClass;
         this.componentProvider = isServerEndpoint ? new ComponentProviderService(componentProvider) {
             @Override
             public <T> T getEndpointInstance(Class<T> endpointClass) throws InstantiationException {
-                return ((ServerEndpointConfig)configuration).getConfigurator().getEndpointInstance(endpointClass);
+                return ((ServerEndpointConfig) configuration).getConfigurator().getEndpointInstance(endpointClass);
             }
         } : componentProvider;
 
@@ -154,7 +150,7 @@ public class AnnotatedEndpoint extends Endpoint {
                 if (a instanceof OnOpen) {
                     if (onOpen == null) {
                         onOpen = m;
-                        onOpenParameters = getParameterExtractors(m, unknownParams);
+                        onOpenParameters = getParameterExtractors(m, unknownParams, collector);
                         validityChecker.checkOnOpenParams(m, unknownParams);
                     } else {
                         collector.addException(new DeploymentException("Multiple methods using @OnOpen annotation" +
@@ -164,7 +160,7 @@ public class AnnotatedEndpoint extends Endpoint {
                 } else if (a instanceof OnClose) {
                     if (onClose == null) {
                         onClose = m;
-                        onCloseParameters = getOnCloseParameterExtractors(m, unknownParams);
+                        onCloseParameters = getOnCloseParameterExtractors(m, unknownParams, collector);
                         validityChecker.checkOnCloseParams(m, unknownParams);
                         if (unknownParams.size() == 1 && unknownParams.values().iterator().next() != CloseReason.class) {
                             onCloseParameters[unknownParams.keySet().iterator().next()] = new ParamValue(0);
@@ -177,7 +173,7 @@ public class AnnotatedEndpoint extends Endpoint {
                 } else if (a instanceof OnError) {
                     if (onError == null) {
                         onError = m;
-                        onErrorParameters = getParameterExtractors(m, unknownParams);
+                        onErrorParameters = getParameterExtractors(m, unknownParams, collector);
                         validityChecker.checkOnErrorParams(m, unknownParams);
                         if (unknownParams.size() == 1 &&
                                 Throwable.class == unknownParams.values().iterator().next()) {
@@ -196,7 +192,7 @@ public class AnnotatedEndpoint extends Endpoint {
                     }
                 } else if (a instanceof OnMessage) {
                     final long maxMessageSize = ((OnMessage) a).maxMessageSize();
-                    final ParameterExtractor[] extractors = getParameterExtractors(m, unknownParams);
+                    final ParameterExtractor[] extractors = getParameterExtractors(m, unknownParams, collector);
                     MessageHandlerFactory handlerFactory;
 
                     if (unknownParams.size() == 1) {
@@ -239,7 +235,7 @@ public class AnnotatedEndpoint extends Endpoint {
         this.onCloseParameters = onCloseParameters;
     }
 
-    private EndpointConfig createEndpointConfig(Class<?> annotatedClass, boolean isServerEndpoint) {
+    private EndpointConfig createEndpointConfig(Class<?> annotatedClass, boolean isServerEndpoint, ErrorCollector collector) {
         if (isServerEndpoint) {
             final ServerEndpoint wseAnnotation = annotatedClass.getAnnotation(ServerEndpoint.class);
 
@@ -256,7 +252,7 @@ public class AnnotatedEndpoint extends Endpoint {
             decoderClasses.addAll(Arrays.asList(wseAnnotation.decoders()));
             subProtocols = wseAnnotation.subprotocols();
 
-            decoderClasses.addAll(EndpointWrapper.getDefaultDecoders());
+            decoderClasses.addAll(TyrusEndpointWrapper.getDefaultDecoders());
 
             ServerEndpointConfig.Builder builder = ServerEndpointConfig.Builder.create(annotatedClass, wseAnnotation.value()).
                     encoders(encoderClasses).decoders(decoderClasses).subprotocols(Arrays.asList(subProtocols));
@@ -284,7 +280,7 @@ public class AnnotatedEndpoint extends Endpoint {
             decoderClasses.addAll(Arrays.asList(wscAnnotation.decoders()));
             subProtocols = wscAnnotation.subprotocols();
 
-            decoderClasses.addAll(EndpointWrapper.getDefaultDecoders());
+            decoderClasses.addAll(TyrusEndpointWrapper.getDefaultDecoders());
 
             ClientEndpointConfig.Configurator configurator = ReflectionHelper.getInstance(wscAnnotation.configurator(), collector);
 
@@ -329,15 +325,15 @@ public class AnnotatedEndpoint extends Endpoint {
         return as == null ? Object.class : (as[0] == null ? Object.class : as[0]);
     }
 
-    private ParameterExtractor[] getOnCloseParameterExtractors(final Method method, Map<Integer, Class<?>> unknownParams) {
-        return getParameterExtractors(method, unknownParams, new HashSet<Class<?>>(Arrays.asList((Class<?>) CloseReason.class)));
+    private ParameterExtractor[] getOnCloseParameterExtractors(final Method method, Map<Integer, Class<?>> unknownParams, ErrorCollector collector) {
+        return getParameterExtractors(method, unknownParams, new HashSet<Class<?>>(Arrays.asList((Class<?>) CloseReason.class)), collector);
     }
 
-    private ParameterExtractor[] getParameterExtractors(final Method method, Map<Integer, Class<?>> unknownParams) {
-        return getParameterExtractors(method, unknownParams, Collections.<Class<?>>emptySet());
+    private ParameterExtractor[] getParameterExtractors(final Method method, Map<Integer, Class<?>> unknownParams, ErrorCollector collector) {
+        return getParameterExtractors(method, unknownParams, Collections.<Class<?>>emptySet(), collector);
     }
 
-    private ParameterExtractor[] getParameterExtractors(final Method method, Map<Integer, Class<?>> unknownParams, Set<Class<?>> params) {
+    private ParameterExtractor[] getParameterExtractors(final Method method, Map<Integer, Class<?>> unknownParams, Set<Class<?>> params, ErrorCollector collector) {
         ParameterExtractor[] result = new ParameterExtractor[method.getParameterTypes().length];
         boolean sessionPresent = false;
         unknownParams.clear();
@@ -417,12 +413,17 @@ public class AnnotatedEndpoint extends Endpoint {
     }
 
     private Object callMethod(Method method, ParameterExtractor[] extractors, Session session, boolean callOnError, Object... params) {
-            Object[] paramValues = new Object[extractors.length];
+        ErrorCollector collector = new ErrorCollector();
+        Object[] paramValues = new Object[extractors.length];
 
         final Object endpoint = annotatedInstance != null ? annotatedInstance :
                 componentProvider.getInstance(annotatedClass, session, collector);
 
         try {
+            if (!collector.isEmpty()) {
+                throw collector.composeComprehensiveException();
+            }
+
             for (int i = 0; i < paramValues.length; i++) {
                 paramValues[i] = extractors[i].value(session, params);
             }
@@ -440,7 +441,7 @@ public class AnnotatedEndpoint extends Endpoint {
     }
 
     void onClose(CloseReason closeReason, Session session) {
-        if(onCloseMethod != null){
+        if (onCloseMethod != null) {
             callMethod(onCloseMethod, onCloseParameters, session, true, closeReason);
         }
 

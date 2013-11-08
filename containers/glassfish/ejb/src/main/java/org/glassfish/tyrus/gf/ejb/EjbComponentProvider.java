@@ -49,7 +49,7 @@ import javax.ejb.Stateless;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
 
-import org.glassfish.tyrus.spi.ComponentProvider;
+import org.glassfish.tyrus.core.ComponentProvider;
 
 /**
  * Provides the instance for the supported EJB classes.
@@ -62,7 +62,7 @@ public class EjbComponentProvider extends ComponentProvider {
 
     @SuppressWarnings("unchecked")
     @Override
-    public <T> T provideInstance(Class<T> c) {
+    public <T> T create(Class<T> c) {
         String name = getName(c);
         T result = null;
         if (name == null) {
@@ -89,7 +89,7 @@ public class EjbComponentProvider extends ComponentProvider {
     }
 
     @Override
-    public boolean destroyInstance(Object o) {
+    public boolean destroy(Object o) {
         return false;
     }
 

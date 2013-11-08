@@ -42,22 +42,17 @@ package org.glassfish.tyrus.servlet;
 import java.io.IOException;
 import java.net.URI;
 import java.util.Enumeration;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import javax.websocket.server.HandshakeRequest;
 import javax.websocket.server.ServerContainer;
-import javax.websocket.server.ServerEndpointConfig;
 
 import javax.servlet.Filter;
 import javax.servlet.FilterChain;
 import javax.servlet.FilterConfig;
-import javax.servlet.FilterRegistration;
-import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
@@ -69,34 +64,27 @@ import javax.servlet.http.HttpSessionListener;
 import javax.servlet.http.WebConnection;
 
 import org.glassfish.tyrus.core.RequestContext;
+import org.glassfish.tyrus.core.TyrusWebSocketEngine;
 import org.glassfish.tyrus.core.Utils;
-import org.glassfish.tyrus.server.ServerContainerFactory;
-import org.glassfish.tyrus.websockets.HandshakeException;
-import org.glassfish.tyrus.websockets.WebSocketEngine;
+import org.glassfish.tyrus.core.WebSocketResponse;
+import org.glassfish.tyrus.spi.WebSocketEngine;
+import org.glassfish.tyrus.spi.Writer;
 
 /**
  * Filter used for Servlet integration.
  * <p/>
- * Consumes only requests with {@link WebSocketEngine#SEC_WS_KEY_HEADER} headers present, all others are
+ * Consumes only requests with {@link HandshakeRequest#SEC_WEBSOCKET_KEY} headers present, all others are
  * passed back to {@link FilterChain}.
  *
  * @author Pavel Bucek (pavel.bucek at oracle.com)
  * @author Stepan Kopriva (stepan.kopriva at oracle.com)
  */
-public class TyrusServletFilter implements Filter, HttpSessionListener {
+class TyrusServletFilter implements Filter, HttpSessionListener {
 
-    private static final int INFORMATIONAL_FIXED_PORT = 8080;
     private final static Logger LOGGER = Logger.getLogger(TyrusServletFilter.class.getName());
-    private final WebSocketEngine engine = WebSocketEngine.getEngine();
+    private final TyrusWebSocketEngine engine;
+
     private org.glassfish.tyrus.server.TyrusServerContainer serverContainer = null;
-
-    private boolean registered = false;
-
-    // @ServerEndpoint annotated classes and classes extending ServerApplicationConfig
-    private Set<Class<?>> classes = null;
-    private ServletContext servletContext = null;
-    private final Set<Class<?>> dynamicallyDeployedClasses = new HashSet<Class<?>>();
-    private final Set<ServerEndpointConfig> dynamicallyDeployedServerEndpointConfigs = new HashSet<ServerEndpointConfig>();
 
     // I don't like this map, but it seems like it is necessary. I am forced to handle subscriptions
     // for HttpSessionListener because the listener itself must be registered *before* ServletContext
@@ -106,53 +94,26 @@ public class TyrusServletFilter implements Filter, HttpSessionListener {
     private final Map<HttpSession, TyrusHttpUpgradeHandler> sessionToHandler =
             new ConcurrentHashMap<HttpSession, TyrusHttpUpgradeHandler>();
 
-    public TyrusServletFilter() {
-    }
-
-    void addClass(Class<?> clazz) {
-        if (this.serverContainer != null) {
-            throw new IllegalStateException("Filter already initiated.");
-        }
-        this.dynamicallyDeployedClasses.add(clazz);
-
-        checkFilterRegistration();
-    }
-
-    void addServerEndpointConfig(ServerEndpointConfig serverEndpointConfig) {
-        if (this.serverContainer != null) {
-            throw new IllegalStateException("Filter already initiated.");
-        }
-        this.dynamicallyDeployedServerEndpointConfigs.add(serverEndpointConfig);
-
-        checkFilterRegistration();
-    }
-
-    private void checkFilterRegistration() {
-        if (servletContext != null && !registered) {
-            registered = true;
-
-            final FilterRegistration.Dynamic reg = servletContext.addFilter("WebSocket filter", this);
-            reg.setAsyncSupported(true);
-            reg.addMappingForUrlPatterns(null, true, "/*");
-            LOGGER.info("Registering WebSocket filter for url pattern /*");
-        }
+    TyrusServletFilter(TyrusWebSocketEngine engine) {
+        this.engine = engine;
     }
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
-        String contextRoot = filterConfig.getServletContext().getContextPath();
-        this.serverContainer = ServerContainerFactory.create(ServletContainer.class, contextRoot, INFORMATIONAL_FIXED_PORT, classes, dynamicallyDeployedClasses, dynamicallyDeployedServerEndpointConfigs);
+        final String frameBufferSize = filterConfig.getServletContext().getInitParameter(TyrusHttpUpgradeHandler.FRAME_BUFFER_SIZE);
+        if (frameBufferSize != null) {
+            engine.setIncomingBufferSize(Integer.parseInt(frameBufferSize));
+        }
+
+        this.serverContainer = (org.glassfish.tyrus.server.TyrusServerContainer) filterConfig.getServletContext().getAttribute(ServerContainer.class.getName());
+
         try {
-            serverContainer.start();
+            // TODO? - port/contextPath .. is it really relevant here?
+            serverContainer.start(filterConfig.getServletContext().getContextPath(), 0);
         } catch (Exception e) {
             throw new ServletException("Web socket server initialization failed.", e);
         } finally {
-
-            // remove reference to filter.
-            final ServerContainer container = (ServerContainer) filterConfig.getServletContext().getAttribute(TyrusServletServerContainer.SERVER_CONTAINER_ATTRIBUTE);
-            if (container instanceof TyrusServletServerContainer) {
-                ((TyrusServletServerContainer) container).doneDeployment();
-            }
+            serverContainer.doneDeployment();
         }
     }
 
@@ -164,7 +125,7 @@ public class TyrusServletFilter implements Filter, HttpSessionListener {
     @Override
     public void sessionDestroyed(HttpSessionEvent se) {
         final TyrusHttpUpgradeHandler upgradeHandler = sessionToHandler.get(se.getSession());
-        if(upgradeHandler != null) {
+        if (upgradeHandler != null) {
             sessionToHandler.remove(se.getSession());
             upgradeHandler.sessionDestroyed();
         }
@@ -205,13 +166,8 @@ public class TyrusServletFilter implements Filter, HttpSessionListener {
         }
 
         @Override
-        public void setWebSocketHolder(WebSocketEngine.WebSocketHolder webSocketHolder) {
-            handler.setWebSocketHolder(webSocketHolder);
-        }
-
-        @Override
-        public void setAuthenticated(boolean authenticated) {
-            handler.setAuthenticated(authenticated);
+        public void preInit(WebSocketEngine.UpgradeInfo upgradeInfo, Writer writer, boolean authenticated) {
+            handler.preInit(upgradeInfo, writer, authenticated);
         }
 
         @Override
@@ -235,20 +191,18 @@ public class TyrusServletFilter implements Filter, HttpSessionListener {
         HttpServletResponse httpServletResponse = (HttpServletResponse) response;
 
         // check for mandatory websocket header
-        final String header = httpServletRequest.getHeader(WebSocketEngine.SEC_WS_KEY_HEADER);
+        final String header = httpServletRequest.getHeader(HandshakeRequest.SEC_WEBSOCKET_KEY);
         if (header != null) {
             LOGGER.fine("Setting up WebSocket protocol handler");
 
             final TyrusHttpUpgradeHandlerProxy handler = new TyrusHttpUpgradeHandlerProxy();
 
-            final ConnectionImpl webSocketConnection = new ConnectionImpl(handler, httpServletResponse);
+            final TyrusServletWriter webSocketConnection = new TyrusServletWriter(handler);
 
             final RequestContext requestContext = RequestContext.Builder.create()
                     .requestURI(URI.create(httpServletRequest.getRequestURI()))
                     .queryString(httpServletRequest.getQueryString())
-                    .connection(webSocketConnection)
-                    .requestPath(httpServletRequest.getServletPath())
-                    .httpSession(httpServletRequest.getSession())
+                    .httpSession(httpServletRequest.getSession(false))
                     .secure(httpServletRequest.isSecure())
                     .userPrincipal(httpServletRequest.getUserPrincipal())
                     .isUserInRoleDelegate(new RequestContext.Builder.IsUserInRoleDelegate() {
@@ -273,37 +227,37 @@ public class TyrusServletFilter implements Filter, HttpSessionListener {
                 }
             }
 
-            try {
-                if (!engine.upgrade(webSocketConnection, requestContext, new WebSocketEngine.WebSocketHolderListener() {
-                    @Override
-                    public void onWebSocketHolder(WebSocketEngine.WebSocketHolder webSocketHolder) throws HandshakeException {
-                        LOGGER.fine("Upgrading Servlet request");
-                        try {
-                            handler.setHandler(httpServletRequest.upgrade(TyrusHttpUpgradeHandler.class));
-                            final String frameBufferSize = request.getServletContext().getInitParameter(TyrusHttpUpgradeHandler.FRAME_BUFFER_SIZE);
-                            if (frameBufferSize != null) {
-                                handler.setIncomingBufferSize(Integer.parseInt(frameBufferSize));
-                            }
-                        } catch (Exception e) {
-                            throw new HandshakeException(500, "Handshake error.", e);
-                        }
-                        handler.setWebSocketHolder(engine.getWebSocketHolder(webSocketConnection));
-                        handler.setAuthenticated(httpServletRequest.getUserPrincipal() != null);
-                        sessionToHandler.put(httpServletRequest.getSession(), handler);
-                    }
-                })) {
+            final WebSocketResponse webSocketResponse = new WebSocketResponse();
+            final WebSocketEngine.UpgradeInfo upgradeInfo = engine.upgrade(requestContext, webSocketResponse);
+            switch (upgradeInfo.getStatus()) {
+                case HANDSHAKE_FAILED:
+                    httpServletResponse.sendError(webSocketResponse.getStatus());
+                    break;
+                case NOT_APPLICABLE:
                     filterChain.doFilter(request, response);
-                    return;
-                }
+                    break;
+                case SUCCESS:
+                    LOGGER.fine("Upgrading Servlet request");
 
-            } catch (HandshakeException e) {
-                LOGGER.log(Level.CONFIG, e.getMessage(), e);
-                httpServletResponse.sendError(e.getCode(), e.getMessage());
+                    handler.setHandler(httpServletRequest.upgrade(TyrusHttpUpgradeHandler.class));
+                    final String frameBufferSize = request.getServletContext().getInitParameter(TyrusHttpUpgradeHandler.FRAME_BUFFER_SIZE);
+                    if (frameBufferSize != null) {
+                        handler.setIncomingBufferSize(Integer.parseInt(frameBufferSize));
+                    }
+
+                    handler.preInit(upgradeInfo, webSocketConnection, httpServletRequest.getUserPrincipal() != null);
+
+                    sessionToHandler.put(httpServletRequest.getSession(), handler);
+
+                    httpServletResponse.setStatus(webSocketResponse.getStatus());
+                    for (Map.Entry<String, List<String>> entry : webSocketResponse.getHeaders().entrySet()) {
+                        httpServletResponse.addHeader(entry.getKey(), Utils.getHeaderFromList(entry.getValue()));
+                    }
+
+                    response.flushBuffer();
+                    LOGGER.fine("Handshake Complete");
+                    break;
             }
-
-            // Servlet bug ?? Not sure why we need to flush the headers
-            response.flushBuffer();
-            LOGGER.fine("Handshake Complete");
         } else {
             filterChain.doFilter(request, response);
         }
@@ -312,23 +266,5 @@ public class TyrusServletFilter implements Filter, HttpSessionListener {
     @Override
     public void destroy() {
         serverContainer.stop();
-    }
-
-    /**
-     * Set the {@link ServletContext}.
-     *
-     * @param servletContext to be set.
-     */
-    public void setServletContext(ServletContext servletContext) {
-        this.servletContext = servletContext;
-    }
-
-    /**
-     * Set the scanned classes.
-     *
-     * @param classes scanned classes.
-     */
-    public void setClasses(Set<Class<?>> classes) {
-        this.classes = classes;
     }
 }

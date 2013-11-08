@@ -43,13 +43,15 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
@@ -58,21 +60,19 @@ import javax.websocket.ClientEndpointConfig;
 import javax.websocket.DeploymentException;
 import javax.websocket.Endpoint;
 import javax.websocket.Extension;
-import javax.websocket.HandshakeResponse;
 import javax.websocket.Session;
 import javax.websocket.WebSocketContainer;
 
 import org.glassfish.tyrus.core.AnnotatedEndpoint;
 import org.glassfish.tyrus.core.BaseContainer;
 import org.glassfish.tyrus.core.ComponentProviderService;
-import org.glassfish.tyrus.core.EndpointWrapper;
 import org.glassfish.tyrus.core.ErrorCollector;
 import org.glassfish.tyrus.core.ReflectionHelper;
-import org.glassfish.tyrus.core.TyrusContainerProvider;
-import org.glassfish.tyrus.core.Utils;
-import org.glassfish.tyrus.spi.SPIHandshakeListener;
-import org.glassfish.tyrus.spi.TyrusClientSocket;
-import org.glassfish.tyrus.spi.TyrusContainer;
+import org.glassfish.tyrus.core.TyrusEndpointWrapper;
+import org.glassfish.tyrus.core.TyrusFuture;
+import org.glassfish.tyrus.spi.ClientContainer;
+import org.glassfish.tyrus.spi.ClientSocket;
+import org.glassfish.tyrus.spi.UpgradeResponse;
 
 /**
  * ClientManager implementation.
@@ -83,15 +83,15 @@ import org.glassfish.tyrus.spi.TyrusContainer;
 public class ClientManager extends BaseContainer implements WebSocketContainer {
 
     /**
-     * Default {@link TyrusContainer} class name.
+     * Default {@link org.glassfish.tyrus.spi.ServerContainerFactory} class name.
      * <p/>
      * Uses Grizzly as transport implementation.
      */
-    private static final String ENGINE_PROVIDER_CLASSNAME = "org.glassfish.tyrus.container.grizzly.GrizzlyEngine";
+    private static final String CONTAINER_PROVIDER_CLASSNAME = "org.glassfish.tyrus.container.grizzly.client.GrizzlyClientContainer";
     private static final Logger LOGGER = Logger.getLogger(ClientManager.class.getName());
-    private final TyrusContainer engine;
+    private final WebSocketContainer webSocketContainer;
+    private final ClientContainer container;
     private final ComponentProviderService componentProvider;
-    private final ErrorCollector collector;
     private final Map<String, Object> properties = new HashMap<String, Object>();
 
     private long defaultAsyncSendTimeout;
@@ -102,79 +102,220 @@ public class ClientManager extends BaseContainer implements WebSocketContainer {
     /**
      * Create new {@link ClientManager} instance.
      * <p/>
-     * Uses {@link ClientManager#ENGINE_PROVIDER_CLASSNAME} as container implementation, thus relevant module needs to
+     * Uses {@link ClientManager#CONTAINER_PROVIDER_CLASSNAME} as container implementation, thus relevant module needs to
      * be on classpath. Setting different container is possible via {@link ClientManager#createClient(String)}.
      *
      * @see ClientManager#createClient(String)
      */
     public static ClientManager createClient() {
-        return createClient(ENGINE_PROVIDER_CLASSNAME);
+        return createClient(CONTAINER_PROVIDER_CLASSNAME);
     }
+
+    /**
+     * Create new ClientManager instance on top of provided {@link WebSocketContainer} instance.
+     * <p/>
+     * Uses {@link ClientManager#CONTAINER_PROVIDER_CLASSNAME} as container implementation, thus relevant module needs to
+     * be on classpath. Setting different container is possible via {@link ClientManager#createClient(String)}.
+     *
+     * @see ClientManager#createClient(String)
+     */
+    public static ClientManager createClient(WebSocketContainer webSocketContainer) {
+        return createClient(CONTAINER_PROVIDER_CLASSNAME, webSocketContainer);
+    }
+
 
     /**
      * Create new ClientManager instance.
      *
      * @return new ClientManager instance.
      */
-    public static ClientManager createClient(String engineProviderClassname) {
-        return new ClientManager(engineProviderClassname);
+    public static ClientManager createClient(String containerProviderClassName) {
+        return new ClientManager(containerProviderClassName, null);
+    }
+
+    /**
+     * Create new ClientManager instance on top of provided {@link WebSocketContainer} instance.
+     *
+     * @return new ClientManager instance.
+     */
+    public static ClientManager createClient(String containerProviderClassName, WebSocketContainer webSocketContainer) {
+        return new ClientManager(containerProviderClassName, webSocketContainer);
     }
 
     /**
      * Create new {@link ClientManager} instance.
      * <p/>
-     * Uses {@link ClientManager#ENGINE_PROVIDER_CLASSNAME} as container implementation, thus relevant module needs to
+     * Uses {@link ClientManager#CONTAINER_PROVIDER_CLASSNAME} as container implementation, thus relevant module needs to
      * be on classpath. Setting different container is possible via {@link ClientManager#createClient(String)}}.
      *
      * @see ClientManager#createClient(String)
      */
     public ClientManager() {
-        this(ENGINE_PROVIDER_CLASSNAME);
+        this(CONTAINER_PROVIDER_CLASSNAME, null);
     }
 
-    private ClientManager(String engineProviderClassname) {
-        collector = new ErrorCollector();
+    private ClientManager(String containerProviderClassName, WebSocketContainer webSocketContainer) {
+        final ErrorCollector collector = new ErrorCollector();
         componentProvider = ComponentProviderService.create();
-        Class engineProviderClazz = null;
+        Class engineProviderClazz;
         try {
-            engineProviderClazz = ReflectionHelper.classForNameWithException(engineProviderClassname);
+            engineProviderClazz = ReflectionHelper.classForNameWithException(containerProviderClassName);
         } catch (ClassNotFoundException e) {
             collector.addException(e);
             throw new RuntimeException(collector.composeComprehensiveException());
         }
-        LOGGER.config(String.format("Provider class loaded: %s", engineProviderClassname));
-        this.engine = (TyrusContainer) ReflectionHelper.getInstance(engineProviderClazz, collector);
-        TyrusContainerProvider.getContainerProvider().setContainer(this);
+        LOGGER.config(String.format("Provider class loaded: %s", containerProviderClassName));
+        this.container = (ClientContainer) ReflectionHelper.getInstance(engineProviderClazz, collector);
         if (!collector.isEmpty()) {
             throw new RuntimeException(collector.composeComprehensiveException());
         }
+        this.webSocketContainer = webSocketContainer;
     }
 
     @Override
-    public Session connectToServer(Class annotatedEndpointClass, URI path) throws DeploymentException {
+    public Session connectToServer(Class annotatedEndpointClass, URI path) throws DeploymentException, IOException {
         if (annotatedEndpointClass.getAnnotation(ClientEndpoint.class) == null) {
             throw new DeploymentException(String.format("Class argument in connectToServer(Class, URI) is to be annotated endpoint class." +
                     "Class %s does not have @ClientEndpoint", annotatedEndpointClass.getName()));
         }
-        return connectToServer(annotatedEndpointClass, null, path.toString());
+        try {
+            return connectToServer(annotatedEndpointClass, null, path.toString(), new SameThreadExecutorService()).get();
+        } catch (InterruptedException e) {
+            throw new DeploymentException(e.getMessage(), e);
+        } catch (ExecutionException e) {
+            final Throwable cause = e.getCause();
+            if (cause instanceof DeploymentException) {
+                throw (DeploymentException) cause;
+            } else if (cause instanceof IOException) {
+                throw (IOException) cause;
+            } else {
+                throw new DeploymentException(cause.getMessage(), cause);
+            }
+        }
     }
 
     @Override
-    public Session connectToServer(Class<? extends Endpoint> endpointClass, ClientEndpointConfig cec, URI path) throws DeploymentException {
-        return connectToServer(endpointClass, cec, path.toString());
+    public Session connectToServer(Class<? extends Endpoint> endpointClass, ClientEndpointConfig cec, URI path) throws DeploymentException, IOException {
+        try {
+            return connectToServer(endpointClass, cec, path.toString(), new SameThreadExecutorService()).get();
+        } catch (InterruptedException e) {
+            throw new DeploymentException(e.getMessage(), e);
+        } catch (ExecutionException e) {
+            final Throwable cause = e.getCause();
+            if (cause instanceof DeploymentException) {
+                throw (DeploymentException) cause;
+            } else if (cause instanceof IOException) {
+                throw (IOException) cause;
+            } else {
+                throw new DeploymentException(cause.getMessage(), cause);
+            }
+        }
     }
 
     @Override
     public Session connectToServer(Endpoint endpointInstance, ClientEndpointConfig cec, URI path) throws DeploymentException, IOException {
-        return connectToServer(endpointInstance, cec, path.toString());
+        try {
+            return connectToServer(endpointInstance, cec, path.toString(), new SameThreadExecutorService()).get();
+        } catch (InterruptedException e) {
+            throw new DeploymentException(e.getMessage(), e);
+        } catch (ExecutionException e) {
+            final Throwable cause = e.getCause();
+            if (cause instanceof DeploymentException) {
+                throw (DeploymentException) cause;
+            } else if (cause instanceof IOException) {
+                throw (IOException) cause;
+            } else {
+                throw new DeploymentException(cause.getMessage(), cause);
+            }
+        }
     }
 
-    public Session connectToServer(Object obj, URI path) throws DeploymentException {
-        return connectToServer(obj, null, path.toString());
+    @Override
+    public Session connectToServer(Object obj, URI path) throws DeploymentException, IOException {
+        try {
+            return connectToServer(obj, null, path.toString(), new SameThreadExecutorService()).get();
+        } catch (InterruptedException e) {
+            throw new DeploymentException(e.getMessage(), e);
+        } catch (ExecutionException e) {
+            final Throwable cause = e.getCause();
+            if (cause instanceof DeploymentException) {
+                throw (DeploymentException) cause;
+            } else if (cause instanceof IOException) {
+                throw (IOException) cause;
+            } else {
+                throw new DeploymentException(cause.getMessage(), cause);
+            }
+        }
     }
 
-    public Session connectToServer(Object obj, ClientEndpointConfig cec, URI path) throws DeploymentException {
-        return connectToServer(obj, cec, path.toString());
+    /**
+     * Non-blocking version of {@link WebSocketContainer#connectToServer(Class, java.net.URI)}.
+     * <p/>
+     * Only simple checks are performed in the main thread; client container is created in different thread, same
+     * applies to connecting etc.
+     *
+     * @param annotatedEndpointClass the annotated websocket client endpoint.
+     * @param path                   the complete path to the server endpoint.
+     * @return Future for the Session created if the connection is successful.
+     * @throws DeploymentException if the class is not a valid annotated endpoint class.
+     */
+    public Future<Session> asyncConnectToServer(Class<?> annotatedEndpointClass, URI path) throws DeploymentException {
+        if (annotatedEndpointClass.getAnnotation(ClientEndpoint.class) == null) {
+            throw new DeploymentException(String.format("Class argument in connectToServer(Class, URI) is to be annotated endpoint class." +
+                    "Class %s does not have @ClientEndpoint", annotatedEndpointClass.getName()));
+        }
+        return connectToServer(annotatedEndpointClass, null, path.toString(), getExecutorService());
+    }
+
+    /**
+     * Non-blocking version of {@link WebSocketContainer#connectToServer(Class, javax.websocket.ClientEndpointConfig, java.net.URI)}.
+     * <p/>
+     * Only simple checks are performed in the main thread; client container is created in different thread, same
+     * applies to connecting etc.
+     *
+     * @param endpointClass the programmatic client endpoint class {@link Endpoint}.
+     * @param path          the complete path to the server endpoint.
+     * @param cec           the configuration used to configure the programmatic endpoint.
+     * @return the Session created if the connection is successful.
+     * @throws DeploymentException if the configuration is not valid
+     * @see WebSocketContainer#connectToServer(Class, javax.websocket.ClientEndpointConfig, java.net.URI)
+     */
+    public Future<Session> asyncConnectToServer(Class<? extends Endpoint> endpointClass, ClientEndpointConfig cec, URI path) throws DeploymentException {
+        return connectToServer(endpointClass, cec, path.toString(), getExecutorService());
+    }
+
+    /**
+     * Non-blocking version of {@link WebSocketContainer#connectToServer(javax.websocket.Endpoint, javax.websocket.ClientEndpointConfig, java.net.URI)}.
+     * <p/>
+     * Only simple checks are performed in the main thread; client container is created in different thread, same
+     * applies to connecting etc.
+     *
+     * @param endpointInstance the programmatic client endpoint instance {@link Endpoint}.
+     * @param path             the complete path to the server endpoint.
+     * @param cec              the configuration used to configure the programmatic endpoint.
+     * @return the Session created if the connection is successful.
+     * @throws DeploymentException if the configuration is not valid
+     * @see WebSocketContainer#connectToServer(javax.websocket.Endpoint, javax.websocket.ClientEndpointConfig, java.net.URI)
+     */
+    public Future<Session> asyncConnectToServer(Endpoint endpointInstance, ClientEndpointConfig cec, URI path) throws DeploymentException {
+        return connectToServer(endpointInstance, cec, path.toString(), getExecutorService());
+    }
+
+    /**
+     * Non-blocking version of {@link WebSocketContainer#connectToServer(Object, java.net.URI)}.
+     * <p/>
+     * Only simple checks are performed in the main thread; client container is created in different thread, same
+     * applies to connecting etc.
+     *
+     * @param obj  the annotated websocket client endpoint
+     *             instance.
+     * @param path the complete path to the server endpoint.
+     * @return the Session created if the connection is successful.
+     * @throws DeploymentException if the annotated endpoint instance is not valid.
+     * @see WebSocketContainer#connectToServer(Object, java.net.URI)
+     */
+    public Future<Session> asyncConnectToServer(Object obj, URI path) throws DeploymentException {
+        return connectToServer(obj, null, path.toString(), getExecutorService());
     }
 
     /**
@@ -183,14 +324,11 @@ public class ClientManager extends BaseContainer implements WebSocketContainer {
      * @param o             the endpoint.
      * @param configuration of the endpoint.
      * @param url           to which the client will connect.
-     * @return {@link Session}.
-     * @throws DeploymentException
+     * @return Future which will return {@link Session} instance when available.
+     * @throws DeploymentException if the endpoint or provided URL is not valid.
      */
-    Session connectToServer(Object o, ClientEndpointConfig configuration, String url) throws DeploymentException {
-        // TODO use maxSessionIdleTimeout, maxBinaryMessageBufferSize and maxTextMessageBufferSize
-        ClientEndpointConfig config = null;
-        Endpoint endpoint;
-        TyrusClientSocket clientSocket = null;
+    Future<Session> connectToServer(final Object o, final ClientEndpointConfig configuration, final String url, final ExecutorService executorService) throws DeploymentException {
+        final TyrusFuture<Session> future = new TyrusFuture<Session>();
 
         try {
             URI uri = new URI(url);
@@ -202,159 +340,229 @@ public class ClientManager extends BaseContainer implements WebSocketContainer {
             throw new DeploymentException("Incorrect WebSocket endpoint URI=" + url, e);
         }
 
-        final CountDownLatch responseLatch = new CountDownLatch(1);
+        executorService.submit(new Runnable() {
+            @Override
+            public void run() {
 
-        try {
-            if (o instanceof Endpoint) {
-                endpoint = (Endpoint) o;
-                config = configuration == null ? ClientEndpointConfig.Builder.create().build() : configuration;
-            } else if (o instanceof Class) {
-                if (Endpoint.class.isAssignableFrom((Class<?>) o)) {
-                    //noinspection unchecked
-                    endpoint = ReflectionHelper.getInstance(((Class<Endpoint>) o), collector);
-                    config = configuration == null ? ClientEndpointConfig.Builder.create().build() : configuration;
-                } else if ((((Class<?>) o).getAnnotation(ClientEndpoint.class) != null)) {
-                    endpoint = AnnotatedEndpoint.fromClass((Class) o, componentProvider, false, collector);
-                    config = (ClientEndpointConfig) ((AnnotatedEndpoint) endpoint).getEndpointConfig();
-                } else {
-                    collector.addException(new DeploymentException(String.format("Class %s in not Endpoint descendant and does not have @ClientEndpoint", ((Class<?>) o).getName())));
-                    endpoint = null;
-                    config = null;
-                }
-            } else {
-                endpoint = AnnotatedEndpoint.fromInstance(o, componentProvider, false, collector);
-                config = (ClientEndpointConfig) ((AnnotatedEndpoint) endpoint).getEndpointConfig();
-            }
+                ClientEndpointConfig config = null;
+                Endpoint endpoint;
+                ClientSocket clientSocket = null;
+                final ErrorCollector collector = new ErrorCollector();
 
-            final ClientEndpointConfig finalConfig = config;
+                final CountDownLatch responseLatch = new CountDownLatch(1);
 
-            if (endpoint != null) {
-                EndpointWrapper clientEndpoint = new EndpointWrapper(endpoint, config, componentProvider, this, url, collector, null);
-                SPIHandshakeListener listener = new SPIHandshakeListener() {
+                try {
+                    if (o instanceof Endpoint) {
+                        endpoint = (Endpoint) o;
+                        config = configuration == null ? ClientEndpointConfig.Builder.create().build() : configuration;
+                    } else if (o instanceof Class) {
+                        if (Endpoint.class.isAssignableFrom((Class<?>) o)) {
+                            //noinspection unchecked
+                            endpoint = ReflectionHelper.getInstance(((Class<Endpoint>) o), collector);
+                            config = configuration == null ? ClientEndpointConfig.Builder.create().build() : configuration;
+                        } else if ((((Class<?>) o).getAnnotation(ClientEndpoint.class) != null)) {
+                            endpoint = AnnotatedEndpoint.fromClass((Class) o, componentProvider, false, collector);
+                            config = (ClientEndpointConfig) ((AnnotatedEndpoint) endpoint).getEndpointConfig();
+                        } else {
+                            collector.addException(new DeploymentException(String.format("Class %s in not Endpoint descendant and does not have @ClientEndpoint", ((Class<?>) o).getName())));
+                            endpoint = null;
+                            config = null;
+                        }
+                    } else {
+                        endpoint = AnnotatedEndpoint.fromInstance(o, componentProvider, false, collector);
+                        config = (ClientEndpointConfig) ((AnnotatedEndpoint) endpoint).getEndpointConfig();
+                    }
 
-                    @Override
-                    public void onResponseHeaders(final Map<String, String> originalHeaders) {
+                    final ClientEndpointConfig finalConfig = config;
 
-                        final Map<String, List<String>> headers =
-                                new TreeMap<String, List<String>>(new Comparator<String>() {
+                    if (endpoint != null) {
+                        TyrusEndpointWrapper clientEndpoint = new TyrusEndpointWrapper(endpoint, config, componentProvider,
+                                webSocketContainer == null ? ClientManager.this : webSocketContainer, url, null);
 
-                                    @Override
-                                    public int compare(String o1, String o2) {
-                                        return o1.toLowerCase().compareTo(o2.toLowerCase());
-                                    }
-                                });
-
-                        for (Map.Entry<String, String> entry : originalHeaders.entrySet()) {
-                            final List<String> values = headers.get(entry.getKey());
-                            if(values == null) {
-                                headers.put(entry.getKey(), Utils.parseHeaderValue(entry.getValue().trim()));
-                            } else {
-                                values.addAll(Utils.parseHeaderValue(entry.getValue().trim()));
-                            }
+                        // fail fast when there is some issue with client endpoint.
+                        if (!collector.isEmpty()) {
+                            future.setFailure(collector.composeComprehensiveException());
+                            return;
                         }
 
-                        finalConfig.getConfigurator().afterResponse(new HandshakeResponse() {
+                        ClientContainer.ClientHandshakeListener listener = new ClientContainer.ClientHandshakeListener() {
 
                             @Override
-                            public Map<String, List<String>> getHeaders() {
-                                return headers;
+                            public void onHandshakeResponse(UpgradeResponse handshakeResponse) {
+                                finalConfig.getConfigurator().afterResponse(handshakeResponse);
+                                responseLatch.countDown();
                             }
-                        });
 
-                        responseLatch.countDown();
+                            @Override
+                            public void onError(Throwable exception) {
+                                finalConfig.getUserProperties().put("org.glassfish.tyrus.client.exception", exception);
+                                responseLatch.countDown();
+                            }
+                        };
+                        clientSocket = container.openClientSocket(url, config, clientEndpoint, listener, properties);
                     }
-
-                    @Override
-                    public void onError(Throwable exception) {
-                        finalConfig.getUserProperties().put("org.glassfish.tyrus.client.exception", exception);
-                        responseLatch.countDown();
-                    }
-                };
-                clientSocket = engine.openClientSocket(url, config, clientEndpoint, listener, properties);
-            }
-
-        } catch (Exception e) {
-            collector.addException(new DeploymentException("Connection failed.", e));
-        }
-
-        if (!collector.isEmpty()) {
-            throw collector.composeComprehensiveException();
-        }
-
-        if (clientSocket != null) {
-            try {
-                // TODO - configurable timeout?
-                final boolean countedDown = responseLatch.await(10, TimeUnit.SECONDS);
-                if (countedDown) {
-                    final Object exception = config.getUserProperties().get("org.glassfish.tyrus.client.exception");
-                    if (exception != null) {
-                        throw new DeploymentException("Handshake error.", (Throwable) exception);
-                    }
-
-                    final Session session = clientSocket.getSession();
-                    if(session.isOpen()) {
-                        session.setMaxBinaryMessageBufferSize(maxBinaryMessageBufferSize);
-                        session.setMaxTextMessageBufferSize(maxTextMessageBufferSize);
-                        session.setMaxIdleTimeout(defaultMaxSessionIdleTimeout);
-                    }
-                    return session;
+                } catch (IOException e) {
+                    future.setFailure(e);
+                    return;
+                } catch (DeploymentException e) {
+                    collector.addException(new DeploymentException("Connection failed.", e));
                 }
-            } catch (InterruptedException e) {
-                throw new DeploymentException("Handshaker response not received.", e);
+
+                if (!collector.isEmpty()) {
+                    future.setFailure(collector.composeComprehensiveException());
+                    return;
+                }
+
+                if (clientSocket != null) {
+                    try {
+                        // TODO - configurable timeout?
+                        final boolean countedDown = responseLatch.await(10, TimeUnit.SECONDS);
+                        if (countedDown) {
+                            final Object exception = config.getUserProperties().get("org.glassfish.tyrus.client.exception");
+                            if (exception != null) {
+                                future.setFailure(new DeploymentException("Handshake error.", (Throwable) exception));
+                            }
+
+                            final Session session = clientSocket.getSession();
+                            if (session.isOpen()) {
+                                session.setMaxBinaryMessageBufferSize(maxBinaryMessageBufferSize);
+                                session.setMaxTextMessageBufferSize(maxTextMessageBufferSize);
+                                session.setMaxIdleTimeout(defaultMaxSessionIdleTimeout);
+                            }
+                            future.setResult(session);
+                            return;
+                        }
+                    } catch (InterruptedException e) {
+                        future.setFailure(new DeploymentException("Handshake response not received.", e));
+                    }
+                }
+                future.setFailure(new DeploymentException("Handshake response not received."));
             }
+        });
 
-            throw new DeploymentException("Handshake response not received.");
-        }
-
-        return null;
+        return future;
     }
 
     @Override
     public int getDefaultMaxBinaryMessageBufferSize() {
-        return maxBinaryMessageBufferSize;
+        if (webSocketContainer == null) {
+            return maxBinaryMessageBufferSize;
+        } else {
+            return webSocketContainer.getDefaultMaxBinaryMessageBufferSize();
+        }
     }
 
     @Override
     public void setDefaultMaxBinaryMessageBufferSize(int i) {
-        maxBinaryMessageBufferSize = i;
+        if (webSocketContainer == null) {
+            maxBinaryMessageBufferSize = i;
+        } else {
+            webSocketContainer.setDefaultMaxBinaryMessageBufferSize(i);
+        }
     }
 
     @Override
     public int getDefaultMaxTextMessageBufferSize() {
-        return maxTextMessageBufferSize;
+        if (webSocketContainer == null) {
+            return maxTextMessageBufferSize;
+        } else {
+            return webSocketContainer.getDefaultMaxTextMessageBufferSize();
+        }
+
     }
 
     @Override
     public void setDefaultMaxTextMessageBufferSize(int i) {
-        maxTextMessageBufferSize = i;
+        if (webSocketContainer == null) {
+            maxTextMessageBufferSize = i;
+        } else {
+            webSocketContainer.setDefaultMaxTextMessageBufferSize(i);
+        }
     }
 
     @Override
     public Set<Extension> getInstalledExtensions() {
-        return Collections.emptySet();
+        if (webSocketContainer == null) {
+            // TODO
+            return Collections.emptySet();
+        } else {
+            return webSocketContainer.getInstalledExtensions();
+        }
     }
 
     @Override
     public long getDefaultAsyncSendTimeout() {
-        return defaultAsyncSendTimeout;
+        if (webSocketContainer == null) {
+            return defaultAsyncSendTimeout;
+        } else {
+            return webSocketContainer.getDefaultAsyncSendTimeout();
+        }
     }
 
     @Override
     public void setAsyncSendTimeout(long timeoutmillis) {
-        this.defaultAsyncSendTimeout = timeoutmillis;
+        if (webSocketContainer == null) {
+            defaultAsyncSendTimeout = timeoutmillis;
+        } else {
+            webSocketContainer.setAsyncSendTimeout(timeoutmillis);
+        }
     }
 
     @Override
     public long getDefaultMaxSessionIdleTimeout() {
-        return defaultMaxSessionIdleTimeout;
+        if (webSocketContainer == null) {
+            return defaultMaxSessionIdleTimeout;
+        } else {
+            return webSocketContainer.getDefaultMaxSessionIdleTimeout();
+        }
     }
 
     @Override
     public void setDefaultMaxSessionIdleTimeout(long defaultMaxSessionIdleTimeout) {
-        this.defaultMaxSessionIdleTimeout = defaultMaxSessionIdleTimeout;
+        if (webSocketContainer == null) {
+            this.defaultMaxSessionIdleTimeout = defaultMaxSessionIdleTimeout;
+        } else {
+            webSocketContainer.setDefaultMaxSessionIdleTimeout(defaultMaxSessionIdleTimeout);
+        }
     }
 
     public Map<String, Object> getProperties() {
         return properties;
+    }
+
+    /**
+     * Executor service which just executes provided {@link Runnable} in the very same thread.
+     */
+    private static class SameThreadExecutorService extends AbstractExecutorService {
+        @Override
+        public void shutdown() {
+            // do nothing.
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            // do nothing.
+            return null;
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return false;
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return false;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+            return false;
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            command.run();
+        }
     }
 }

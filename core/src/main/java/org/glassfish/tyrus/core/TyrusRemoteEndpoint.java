@@ -39,23 +39,21 @@
  */
 package org.glassfish.tyrus.core;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.Future;
 
 import javax.websocket.CloseReason;
+import javax.websocket.SendHandler;
 
-import org.glassfish.tyrus.spi.SPIRemoteEndpoint;
-import org.glassfish.tyrus.websockets.DataFrame;
-import org.glassfish.tyrus.websockets.WebSocket;
+import org.glassfish.tyrus.spi.RemoteEndpoint;
 
 /**
- * {@link SPIRemoteEndpoint} implementation.
+ * {@link org.glassfish.tyrus.spi.RemoteEndpoint} implementation.
  *
  * @author Danny Coward (danny.coward at oracle.com)
  * @author Pavel Bucek (pavel.bucek at oracle.com)
  */
-public class TyrusRemoteEndpoint extends SPIRemoteEndpoint {
+public class TyrusRemoteEndpoint extends RemoteEndpoint {
 
     private final WebSocket socket;
 
@@ -69,39 +67,49 @@ public class TyrusRemoteEndpoint extends SPIRemoteEndpoint {
     }
 
     @Override
-    public Future<DataFrame> sendText(String text) throws IOException {
-        return this.socket.send(text);
+    public Future<DataFrame> sendText(String text) {
+        return socket.send(text);
     }
 
     @Override
-    public Future<DataFrame> sendBinary(ByteBuffer byteBuffer) throws IOException {
-        return this.socket.send(Utils.getRemainingArray(byteBuffer));
+    public void sendText(String text, SendHandler handler) {
+        socket.send(text, handler);
     }
 
     @Override
-    public Future<DataFrame> sendText(String fragment, boolean isLast) throws IOException {
-        return this.socket.stream(isLast, fragment);
+    public Future<DataFrame> sendBinary(ByteBuffer byteBuffer) {
+        return socket.send(Utils.getRemainingArray(byteBuffer));
     }
 
     @Override
-    public Future<DataFrame> sendBinary(ByteBuffer byteBuffer, boolean b) throws IOException {
+    public void sendBinary(ByteBuffer data, SendHandler handler) {
+        socket.send(Utils.getRemainingArray(data), handler);
+    }
+
+    @Override
+    public Future<DataFrame> sendText(String fragment, boolean isLast) {
+        return socket.stream(isLast, fragment);
+    }
+
+    @Override
+    public Future<DataFrame> sendBinary(ByteBuffer byteBuffer, boolean b) {
         byte[] bytes = Utils.getRemainingArray(byteBuffer);
-        return this.socket.stream(b, bytes, 0, bytes.length);
+        return socket.stream(b, bytes, 0, bytes.length);
     }
 
     @Override
     public Future<DataFrame> sendPing(ByteBuffer byteBuffer) {
-        return this.socket.sendPing(Utils.getRemainingArray(byteBuffer));
+        return socket.sendPing(Utils.getRemainingArray(byteBuffer));
     }
 
     @Override
     public Future<DataFrame> sendPong(ByteBuffer byteBuffer) {
-        return this.socket.sendPong(Utils.getRemainingArray(byteBuffer));
+        return socket.sendPong(Utils.getRemainingArray(byteBuffer));
     }
 
     @Override
     public void close(CloseReason closeReason) {
-        this.socket.close(closeReason.getCloseCode().getCode(), closeReason.getReasonPhrase());
+        socket.close(closeReason.getCloseCode().getCode(), closeReason.getReasonPhrase());
     }
 
     @Override
@@ -116,13 +124,27 @@ public class TyrusRemoteEndpoint extends SPIRemoteEndpoint {
 
         TyrusRemoteEndpoint that = (TyrusRemoteEndpoint) o;
 
-        if (!socket.equals(that.socket)) return false;
-
-        return true;
+        return socket.equals(that.socket);
     }
 
     @Override
     public int hashCode() {
         return socket.hashCode();
+    }
+
+    /**
+     * Write raw data to underlying connection.
+     * <p/>
+     * Use this only when you know what you are doing.
+     *
+     * @param dataFrame bytes to be send.
+     * @return future can be used to get information about sent message.
+     */
+    public Future<DataFrame> sendRawFrame(ByteBuffer dataFrame) {
+        return socket.sendRawFrame(dataFrame);
+    }
+
+    WebSocket getSocket() {
+        return socket;
     }
 }

@@ -49,8 +49,6 @@ import javax.websocket.WebSocketContainer;
 
 import javax.naming.InitialContext;
 
-import org.glassfish.tyrus.websockets.ExecutorServiceProvider;
-
 /**
  * Base WebSocket container.
  * <p/>
@@ -58,7 +56,7 @@ import org.glassfish.tyrus.websockets.ExecutorServiceProvider;
  *
  * @author Jitendra Kotamraju
  */
-public abstract class BaseContainer extends ExecutorServiceProvider implements WebSocketContainer{
+public abstract class BaseContainer extends ExecutorServiceProvider implements WebSocketContainer {
     private final ExecutorService executorService;
     private final ScheduledExecutorService scheduledExecutorService;
     private ThreadFactory threadFactory = null;
@@ -87,10 +85,12 @@ public abstract class BaseContainer extends ExecutorServiceProvider implements W
             es = (ExecutorService) ic.lookup("java:comp/DefaultManagedExecutorService");
         } catch (Exception e) {
             // ignore
+        } catch (LinkageError error) {
+            // ignore - JDK8 compact2 profile - http://openjdk.java.net/jeps/161
         }
 
         if (es == null) {
-            if(threadFactory == null){
+            if (threadFactory == null) {
                 threadFactory = new DaemonThreadFactory();
             }
             es = Executors.newCachedThreadPool(threadFactory);
@@ -107,14 +107,16 @@ public abstract class BaseContainer extends ExecutorServiceProvider implements W
             service = (ScheduledExecutorService) ic.lookup("java:comp/DefaultManagedScheduledExecutorService");
         } catch (Exception e) {
             // ignore
+        } catch (LinkageError error) {
+            // ignore - JDK8 compact2 profile - http://openjdk.java.net/jeps/161
         }
 
         if (service == null) {
-            if(threadFactory == null){
+            if (threadFactory == null) {
                 threadFactory = new DaemonThreadFactory();
             }
 
-            service =  Executors.newScheduledThreadPool(10, threadFactory);
+            service = Executors.newScheduledThreadPool(10, threadFactory);
         }
 
         return service;

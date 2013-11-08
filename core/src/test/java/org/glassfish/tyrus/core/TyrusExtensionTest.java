@@ -45,8 +45,6 @@ import java.util.List;
 
 import javax.websocket.Extension;
 
-import org.glassfish.tyrus.core.TyrusExtension;
-
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -87,7 +85,7 @@ public class TyrusExtensionTest {
                     return "Mmm. Lost a planet, Master Obi-Wan has. How embarrassing. How embarrassing.";
                 }
             }
-);
+            );
         }};
         final TyrusExtension test = new TyrusExtension("test", parameters);
 

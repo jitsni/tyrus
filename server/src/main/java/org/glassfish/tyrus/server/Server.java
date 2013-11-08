@@ -41,26 +41,33 @@ package org.glassfish.tyrus.server;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
 import java.util.logging.Logger;
 
 import javax.websocket.DeploymentException;
 
+import org.glassfish.tyrus.spi.ServerContainer;
+import org.glassfish.tyrus.spi.ServerContainerFactory;
+
 /**
  * Implementation of the WebSocket Server.
  *
  * @author Stepan Kopriva (stepan.kopriva at oracle.com)
+ * @author Pavel Bucek (pavel.bucek at oracle.com)
  */
 public class Server {
-    private TyrusServerContainer server;
+    private ServerContainer server;
+    private final Map<String, Object> properties;
     private final Set<Class<?>> configuration;
     private final String hostName;
     private final int port;
     private final String rootPath;
 
-    private static final String ENGINE_PROVIDER_CLASSNAME = "org.glassfish.tyrus.container.grizzly.GrizzlyEngine";
+    private static final String ENGINE_PROVIDER_CLASSNAME = "org.glassfish.tyrus.container.grizzly.server.GrizzlyServerContainer";
     private static final Logger LOGGER = Logger.getLogger(Server.class.getClass().getName());
     private static final int DEFAULT_PORT = 8025;
     private static final String DEFAULT_HOST_NAME = "localhost";
@@ -70,27 +77,25 @@ public class Server {
      * Create new server instance.
      *
      * @param configuration to be registered with the server. Classes annotated with
-     * {@link javax.websocket.server.ServerEndpoint},
+     *                      {@link javax.websocket.server.ServerEndpoint},
      *                      implementing {@link javax.websocket.server.ServerApplicationConfig}
      *                      or extending {@link javax.websocket.server.ServerEndpointConfig} are supported.
      */
     public Server(Class<?>... configuration) {
-        this(null, 0, null, configuration);
+        this(null, 0, null, null, configuration);
     }
 
     /**
-     * Construct new server.
+     * Create new server instance.
      *
-     * @param hostName hostName of the server.
-     * @param port     port of the server.
-     * @param rootPath root path to the server App.
+     * @param properties    properties used as a parameter to {@link ServerContainerFactory#createServerContainer(java.util.Map)} call.
      * @param configuration to be registered with the server. Classes annotated with
-     * {@link javax.websocket.server.ServerEndpoint},
+     *                      {@link javax.websocket.server.ServerEndpoint},
      *                      implementing {@link javax.websocket.server.ServerApplicationConfig}
      *                      or extending {@link javax.websocket.server.ServerEndpointConfig} are supported.
      */
-    public Server(String hostName, int port, String rootPath, Class<?>... configuration) {
-        this(hostName, port, rootPath, new HashSet<Class<?>>(Arrays.asList(configuration)));
+    public Server(Map<String, Object> properties, Class<?>... configuration) {
+        this(null, 0, null, properties, configuration);
     }
 
     /**
@@ -99,16 +104,34 @@ public class Server {
      * @param hostName      hostName of the server.
      * @param port          port of the server.
      * @param rootPath      root path to the server App.
+     * @param properties    properties used as a parameter to {@link ServerContainerFactory#createServerContainer(java.util.Map)} call.
      * @param configuration to be registered with the server. Classes annotated with
-     * {@link javax.websocket.server.ServerEndpoint},
+     *                      {@link javax.websocket.server.ServerEndpoint},
      *                      implementing {@link javax.websocket.server.ServerApplicationConfig}
      *                      or extending {@link javax.websocket.server.ServerEndpointConfig} are supported.
      */
-    public Server(String hostName, int port, String rootPath, Set<Class<?>> configuration) {
+    public Server(String hostName, int port, String rootPath, Map<String, Object> properties, Class<?>... configuration) {
+        this(hostName, port, rootPath, properties, new HashSet<Class<?>>(Arrays.asList(configuration)));
+    }
+
+    /**
+     * Construct new server.
+     *
+     * @param hostName      hostName of the server.
+     * @param port          port of the server.
+     * @param rootPath      root path to the server App.
+     * @param properties    properties used as a parameter to {@link ServerContainerFactory#createServerContainer(java.util.Map)} call.
+     * @param configuration to be registered with the server. Classes annotated with
+     *                      {@link javax.websocket.server.ServerEndpoint},
+     *                      implementing {@link javax.websocket.server.ServerApplicationConfig}
+     *                      or extending {@link javax.websocket.server.ServerEndpointConfig} are supported.
+     */
+    public Server(String hostName, int port, String rootPath, Map<String, Object> properties, Set<Class<?>> configuration) {
         this.hostName = hostName == null ? DEFAULT_HOST_NAME : hostName;
         this.port = port == 0 ? DEFAULT_PORT : port;
         this.rootPath = rootPath == null ? DEFAULT_ROOT_PATH : rootPath;
         this.configuration = configuration;
+        this.properties = properties == null ? null : new HashMap<String, Object>(properties);
     }
 
     /**
@@ -117,14 +140,18 @@ public class Server {
     public synchronized void start() throws DeploymentException {
         try {
             if (server == null) {
-                server = ServerContainerFactory.create(ENGINE_PROVIDER_CLASSNAME, rootPath, port,
-                        configuration);
-                server.start();
+                server = ServerContainerFactory.createServerContainer(null);
+
+                for (Class<?> clazz : configuration) {
+                    server.addEndpoint(clazz);
+                }
+
+                server.start(rootPath, port);
                 LOGGER.info("WebSocket Registered apps: URLs all start with ws://" + this.hostName + ":" + this.port);
                 LOGGER.info("WebSocket server started.");
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            throw new DeploymentException(e.getMessage(), e);
         }
     }
 
@@ -150,7 +177,7 @@ public class Server {
         String hostname = args[0];
         String wsroot = args[2];
 
-        Server server = new Server(hostname, port, wsroot, beanClasses);
+        Server server = new Server(hostname, port, wsroot, null, beanClasses);
 
         try {
             server.start();
@@ -181,9 +208,5 @@ public class Server {
             }
         }
         return beanClasses;
-    }
-
-    public TyrusServerContainer getServerContainer() {
-        return server;
     }
 }

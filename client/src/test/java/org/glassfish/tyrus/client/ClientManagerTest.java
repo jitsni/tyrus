@@ -43,11 +43,9 @@ import java.util.Map;
 
 import javax.websocket.ClientEndpointConfig;
 
-import org.glassfish.tyrus.spi.SPIEndpoint;
-import org.glassfish.tyrus.spi.SPIHandshakeListener;
-import org.glassfish.tyrus.spi.TyrusClientSocket;
-import org.glassfish.tyrus.spi.TyrusContainer;
-import org.glassfish.tyrus.spi.TyrusServer;
+import org.glassfish.tyrus.spi.ClientContainer;
+import org.glassfish.tyrus.spi.ClientSocket;
+import org.glassfish.tyrus.spi.EndpointWrapper;
 
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
@@ -83,18 +81,14 @@ public class ClientManagerTest {
     }
 
     private ClientManager createClientManager() {
-        return ClientManager.createClient(NoopTyrusContainer.class.getName());
+        return ClientManager.createClient(NoopContainer.class.getName());
     }
 
-    public static class NoopTyrusContainer implements TyrusContainer {
-        @Override
-        public TyrusServer createServer(String rootPath, int port) {
-            return null;
-        }
+    public static class NoopContainer implements ClientContainer {
 
         @Override
-        public TyrusClientSocket openClientSocket(String url, ClientEndpointConfig cec, SPIEndpoint endpoint,
-                                                  SPIHandshakeListener listener, Map<String, Object> properties) {
+        public ClientSocket openClientSocket(String url, ClientEndpointConfig cec, EndpointWrapper endpoint,
+                                             ClientContainer.ClientHandshakeListener listener, Map<String, Object> properties) {
             return null;
         }
     }

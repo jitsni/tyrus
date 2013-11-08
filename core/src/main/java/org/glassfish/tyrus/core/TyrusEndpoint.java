@@ -41,37 +41,23 @@ package org.glassfish.tyrus.core;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.websocket.CloseReason;
 import javax.websocket.EndpointConfig;
 import javax.websocket.Extension;
-import javax.websocket.HandshakeResponse;
-import javax.websocket.Session;
 import javax.websocket.server.HandshakeRequest;
 import javax.websocket.server.ServerEndpointConfig;
 
-import org.glassfish.tyrus.spi.SPIEndpoint;
-import org.glassfish.tyrus.spi.SPIRegisteredEndpoint;
-import org.glassfish.tyrus.websockets.ClosingDataFrame;
-import org.glassfish.tyrus.websockets.ProtocolHandler;
-import org.glassfish.tyrus.websockets.WebSocket;
-import org.glassfish.tyrus.websockets.WebSocketApplication;
-import org.glassfish.tyrus.websockets.WebSocketEngine;
-import org.glassfish.tyrus.websockets.WebSocketListener;
-import org.glassfish.tyrus.websockets.WebSocketRequest;
-import org.glassfish.tyrus.websockets.WebSocketResponse;
+import org.glassfish.tyrus.spi.EndpointWrapper;
+import org.glassfish.tyrus.spi.UpgradeRequest;
+import org.glassfish.tyrus.spi.UpgradeResponse;
 
 /**
- * Implementation of {@link SPIRegisteredEndpoint}.
+ * Implementation of {@link WebSocketApplication}.
  * <p/>
  * Please note that for one connection to WebSocketApplication it is guaranteed that the methods:
  * isApplicationRequest, createSocket, getSupportedProtocols, getSupportedExtensions are called in this order.
@@ -81,9 +67,9 @@ import org.glassfish.tyrus.websockets.WebSocketResponse;
  * @author Stepan Kopriva (stepan.kopriva at oracle.com)
  * @author Pavel Bucek (pavel.bucek at oracle.com)
  */
-public class TyrusEndpoint extends WebSocketApplication implements SPIRegisteredEndpoint {
+public class TyrusEndpoint extends WebSocketApplication {
 
-    private final SPIEndpoint endpoint;
+    private final EndpointWrapper endpoint;
 
     /**
      * Used to store negotiated extensions between the call of isApplicationRequest method and getSupportedExtensions.
@@ -96,23 +82,23 @@ public class TyrusEndpoint extends WebSocketApplication implements SPIRegistered
     private String temporaryNegotiatedProtocol;
 
     /**
-     * Create {@link TyrusEndpoint} which represents given {@link SPIEndpoint}.
+     * Create {@link TyrusEndpoint} which represents given {@link org.glassfish.tyrus.spi.EndpointWrapper}.
      *
      * @param endpoint endpoint to be wrapped.
      */
-    public TyrusEndpoint(SPIEndpoint endpoint) {
+    public TyrusEndpoint(EndpointWrapper endpoint) {
         this.endpoint = endpoint;
     }
 
     @Override
-    public boolean isApplicationRequest(WebSocketRequest webSocketRequest) {
-        final List<String> protocols = webSocketRequest.getHeaders().get(WebSocketEngine.SEC_WS_PROTOCOL_HEADER);
+    public boolean isApplicationRequest(UpgradeRequest webSocketRequest) {
+        final List<String> protocols = webSocketRequest.getHeaders().get(UpgradeRequest.SEC_WEBSOCKET_PROTOCOL);
         temporaryNegotiatedProtocol = endpoint.getNegotiatedProtocol(protocols);
 
-        final List<Extension> extensions = TyrusExtension.fromString(webSocketRequest.getHeaders().get(WebSocketEngine.SEC_WS_EXTENSIONS_HEADER));
+        final List<Extension> extensions = TyrusExtension.fromString(webSocketRequest.getHeaders().get(UpgradeRequest.SEC_WEBSOCKET_EXTENSIONS));
         temporaryNegotiatedExtensions = endpoint.getNegotiatedExtensions(extensions);
 
-        return endpoint.checkHandshake(webSocketRequest instanceof RequestContext ? (RequestContext) webSocketRequest : null);
+        return endpoint.checkHandshake(webSocketRequest);
     }
 
     @Override
@@ -127,8 +113,8 @@ public class TyrusEndpoint extends WebSocketApplication implements SPIRegistered
     }
 
     @Override
-    public void onConnect(WebSocket socket) {
-        this.endpoint.onConnect(new TyrusRemoteEndpoint(socket), temporaryNegotiatedProtocol, temporaryNegotiatedExtensions);
+    public void onConnect(WebSocket socket, UpgradeRequest upgradeRequest) {
+        this.endpoint.onConnect(new TyrusRemoteEndpoint(socket), temporaryNegotiatedProtocol, temporaryNegotiatedExtensions, upgradeRequest);
     }
 
     @Override
@@ -162,13 +148,7 @@ public class TyrusEndpoint extends WebSocketApplication implements SPIRegistered
     }
 
     @Override
-    public void onClose(WebSocket socket, ClosingDataFrame frame) {
-        CloseReason closeReason = null;
-
-        if (frame != null) {
-            closeReason = new CloseReason(CloseReason.CloseCodes.getCloseCode(frame.getCode()), frame.getReason() == null ? "" : frame.getReason());
-        }
-
+    public void onClose(WebSocket socket, CloseReason closeReason) {
         this.endpoint.onClose(new TyrusRemoteEndpoint(socket), closeReason);
     }
 
@@ -183,32 +163,8 @@ public class TyrusEndpoint extends WebSocketApplication implements SPIRegistered
     }
 
     @Override
-    public void remove() {
-        this.endpoint.remove();
-    }
-
-    @Override
-    public Set<Session> getOpenSessions() {
-        return endpoint.getOpenSessions();
-    }
-
-    @Override
-    public void onExtensionNegotiation(List<org.glassfish.tyrus.websockets.Extension> extensions) {
-    }
-
-    @Override
-    public List<org.glassfish.tyrus.websockets.Extension> getSupportedExtensions() {
-        List<org.glassfish.tyrus.websockets.Extension> grizzlyExtensions = new ArrayList<org.glassfish.tyrus.websockets.Extension>();
-
-        for (Extension ext : temporaryNegotiatedExtensions) {
-            final org.glassfish.tyrus.websockets.Extension extension = new org.glassfish.tyrus.websockets.Extension(ext.getName());
-            for (Extension.Parameter p : ext.getParameters()) {
-                extension.getParameters().add(new org.glassfish.tyrus.websockets.Extension.Parameter(p.getName(), p.getValue()));
-            }
-            grizzlyExtensions.add(extension);
-        }
-
-        return grizzlyExtensions;
+    public List<Extension> getSupportedExtensions() {
+        return new ArrayList<Extension>(temporaryNegotiatedExtensions);
     }
 
     @Override
@@ -221,7 +177,7 @@ public class TyrusEndpoint extends WebSocketApplication implements SPIRegistered
     public List<String> getSupportedProtocols(List<String> subProtocol) {
         List<String> result;
 
-        if (temporaryNegotiatedProtocol == null) {
+        if (temporaryNegotiatedProtocol == null || temporaryNegotiatedProtocol.isEmpty()) {
             result = Collections.emptyList();
         } else {
             result = new ArrayList<String>();
@@ -232,34 +188,19 @@ public class TyrusEndpoint extends WebSocketApplication implements SPIRegistered
     }
 
     @Override
-    public void onHandShakeResponse(WebSocketRequest request, WebSocketResponse response) {
+    public void onHandShakeResponse(UpgradeRequest request, UpgradeResponse response) {
         final EndpointConfig configuration = this.endpoint.getEndpointConfig();
 
         if (configuration instanceof ServerEndpointConfig) {
-            final HandshakeResponse handshakeResponse = createHandshakeResponse(response);
 
             // http://java.net/jira/browse/TYRUS-62
             final ServerEndpointConfig serverEndpointConfig = (ServerEndpointConfig) configuration;
             serverEndpointConfig.getConfigurator().modifyHandshake(serverEndpointConfig, createHandshakeRequest(request),
-                    handshakeResponse);
-
-            for (Map.Entry<String, List<String>> headerEntry : handshakeResponse.getHeaders().entrySet()) {
-                StringBuilder finalHeaderValue = new StringBuilder();
-
-                for (String headerValue : headerEntry.getValue()) {
-                    if (finalHeaderValue.length() != 0) {
-                        finalHeaderValue.append(", ");
-                    }
-
-                    finalHeaderValue.append(headerValue);
-                }
-
-                response.getHeaders().put(headerEntry.getKey(), finalHeaderValue.toString());
-            }
+                    response);
         }
     }
 
-    private HandshakeRequest createHandshakeRequest(final WebSocketRequest webSocketRequest) {
+    private HandshakeRequest createHandshakeRequest(final UpgradeRequest webSocketRequest) {
         if (webSocketRequest instanceof RequestContext) {
             final RequestContext requestContext = (RequestContext) webSocketRequest;
             // TYRUS-208; spec requests headers to be read only when passed to ServerEndpointConfig.Configurator#modifyHandshake.
@@ -271,24 +212,18 @@ public class TyrusEndpoint extends WebSocketApplication implements SPIRegistered
         return null;
     }
 
-    private HandshakeResponse createHandshakeResponse(final WebSocketResponse webSocketResponse) {
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
 
-        final Map<String, List<String>> headers = new TreeMap<String, List<String>>(new Comparator<String>() {
-            @Override
-            public int compare(String o1, String o2) {
-                return o1.toLowerCase().compareTo(o2.toLowerCase());
-            }
-        });
+        TyrusEndpoint that = (TyrusEndpoint) o;
 
-        for (Map.Entry<String, String> entry : webSocketResponse.getHeaders().entrySet()) {
-            headers.put(entry.getKey(), Arrays.asList(entry.getValue()));
-        }
+        return endpoint.equals(that.endpoint);
+    }
 
-        return new HandshakeResponse() {
-            @Override
-            public Map<String, List<String>> getHeaders() {
-                return headers;
-            }
-        };
+    @Override
+    public int hashCode() {
+        return endpoint.hashCode();
     }
 }

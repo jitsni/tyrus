@@ -52,7 +52,7 @@ import javax.enterprise.inject.spi.InjectionTarget;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
 
-import org.glassfish.tyrus.spi.ComponentProvider;
+import org.glassfish.tyrus.core.ComponentProvider;
 
 /**
  * Provides the instance for CDI class.
@@ -109,10 +109,10 @@ public class CdiComponentProvider extends ComponentProvider {
 
     @SuppressWarnings("unchecked")
     @Override
-    public <T> T provideInstance(Class<T> c) {
+    public <T> T create(Class<T> c) {
         if (managerRetrieved) {
             synchronized (beanManager) {
-                T managedObject = null;
+                T managedObject;
                 AnnotatedType annotatedType = beanManager.createAnnotatedType(c);
                 InjectionTarget it = beanManager.createInjectionTarget(annotatedType);
                 CreationalContext cc = beanManager.createCreationalContext(null);
@@ -129,7 +129,7 @@ public class CdiComponentProvider extends ComponentProvider {
     }
 
     @Override
-    public boolean destroyInstance(Object o) {
+    public boolean destroy(Object o) {
         //if the object is not in map, nothing happens
         if(cdiBeanToContext.containsKey(o)) {
             cdiBeanToContext.get(o).cleanup(o);
@@ -141,8 +141,8 @@ public class CdiComponentProvider extends ComponentProvider {
     }
 
     private static class CdiInjectionContext {
-        InjectionTarget it;
-        CreationalContext cc;
+        final InjectionTarget it;
+        final CreationalContext cc;
 
         CdiInjectionContext(InjectionTarget it, CreationalContext cc) {
             this.it = it;

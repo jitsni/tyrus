@@ -45,7 +45,7 @@
     <parent>
         <groupId>org.glassfish.tyrus.bundles</groupId>
         <artifactId>tyrus-bundles</artifactId>
-        <version>1.3-SNAPSHOT</version>
+        <version>1.4-SNAPSHOT</version>
     </parent>
 
     <artifactId>websocket-ri-bundle</artifactId>
@@ -103,6 +103,9 @@
                 <directory>${basedir}/target/src/main/resources</directory>
             </resource>
             <resource>
+                <directory>${basedir}/src/main/resources</directory>
+            </resource>
+            <resource>
                 <directory>${gen-src-dir}</directory>
                 <excludes>
                     <exclude>**/*.java</exclude>
@@ -149,14 +152,6 @@
                                 </artifactItem>
                                 <artifactItem>
                                     <groupId>org.glassfish.tyrus</groupId>
-                                    <artifactId>tyrus-websocket-core</artifactId>
-                                    <version>${project.version}</version>
-                                    <classifier>sources</classifier>
-                                    <overWrite>false</overWrite>
-                                    <outputDirectory>${gen-src-dir}</outputDirectory>
-                                </artifactItem>
-                                <artifactItem>
-                                    <groupId>org.glassfish.tyrus</groupId>
                                     <artifactId>tyrus-core</artifactId>
                                     <version>${project.version}</version>
                                     <classifier>sources</classifier>
@@ -186,6 +181,7 @@
                                     <classifier>sources</classifier>
                                     <overWrite>false</overWrite>
                                     <outputDirectory>${gen-src-dir}</outputDirectory>
+                                    <excludes>META-INF/services/org.glassfish.tyrus.core.ComponentProvider</excludes>
                                 </artifactItem>
                                 <artifactItem>
                                     <groupId>org.glassfish.tyrus</groupId>
@@ -194,10 +190,19 @@
                                     <classifier>sources</classifier>
                                     <overWrite>false</overWrite>
                                     <outputDirectory>${gen-src-dir}</outputDirectory>
+                                    <excludes>META-INF/services/org.glassfish.tyrus.core.ComponentProvider</excludes>
                                 </artifactItem>
                                 <artifactItem>
                                     <groupId>org.glassfish.tyrus</groupId>
-                                    <artifactId>tyrus-container-grizzly</artifactId>
+                                    <artifactId>tyrus-container-grizzly-client</artifactId>
+                                    <version>${project.version}</version>
+                                    <classifier>sources</classifier>
+                                    <overWrite>false</overWrite>
+                                    <outputDirectory>${gen-src-dir}</outputDirectory>
+                                </artifactItem>
+                                <artifactItem>
+                                    <groupId>org.glassfish.tyrus</groupId>
+                                    <artifactId>tyrus-container-grizzly-server</artifactId>
                                     <version>${project.version}</version>
                                     <classifier>sources</classifier>
                                     <overWrite>false</overWrite>

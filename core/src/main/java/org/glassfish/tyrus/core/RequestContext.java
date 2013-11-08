@@ -49,28 +49,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
-import javax.websocket.server.HandshakeRequest;
-
-import org.glassfish.tyrus.spi.SPIHandshakeRequest;
-import org.glassfish.tyrus.websockets.Connection;
-import org.glassfish.tyrus.websockets.WebSocketRequest;
+import org.glassfish.tyrus.spi.UpgradeRequest;
 
 /**
- * Implementation of all possible request interfaces. Should be only point of truth.
+ * Implementation of all possible request interfaces. Should be the only point of truth.
  *
  * @author Pavel Bucek (pavel.bucek at oracle.com)
  */
-public final class RequestContext implements HandshakeRequest, SPIHandshakeRequest, WebSocketRequest {
+public final class RequestContext extends UpgradeRequest {
 
     private final URI requestURI;
     private final String queryString;
-    private final Connection connection;
     private final Object httpSession;
     private final boolean secure;
     private final Principal userPrincipal;
     private final Builder.IsUserInRoleDelegate isUserInRoleDelegate;
-
-    private String requestPath;
 
     private Map<String, List<String>> headers = new TreeMap<String, List<String>>(new Comparator<String>() {
         @Override
@@ -81,13 +74,11 @@ public final class RequestContext implements HandshakeRequest, SPIHandshakeReque
 
     private Map<String, List<String>> parameterMap;
 
-    private RequestContext(URI requestURI, String requestPath, String queryString, Connection connection,
+    private RequestContext(URI requestURI, String queryString,
                            Object httpSession, boolean secure, Principal userPrincipal,
                            Builder.IsUserInRoleDelegate IsUserInRoleDelegate, Map<String, List<String>> parameterMap) {
         this.requestURI = requestURI;
-        this.requestPath = requestPath;
         this.queryString = queryString;
-        this.connection = connection;
         this.httpSession = httpSession;
         this.secure = secure;
         this.userPrincipal = userPrincipal;
@@ -100,6 +91,7 @@ public final class RequestContext implements HandshakeRequest, SPIHandshakeReque
      *
      * @return headers map. List items are corresponding to header declaration in HTTP request.
      */
+    @Override
     public Map<String, List<String>> getHeaders() {
         return headers;
     }
@@ -110,15 +102,16 @@ public final class RequestContext implements HandshakeRequest, SPIHandshakeReque
      * @param name header name.
      * @return {@link List} of header values iff found, {@code null} otherwise.
      */
+    @Override
     public String getHeader(String name) {
         final List<String> stringList = headers.get(name);
-        if(stringList == null) {
+        if (stringList == null) {
             return null;
         } else {
             StringBuilder sb = new StringBuilder();
             boolean first = true;
-            for(String s : stringList) {
-                if(first) {
+            for (String s : stringList) {
+                if (first) {
                     first = false;
                 } else {
                     sb.append(", ");
@@ -131,37 +124,11 @@ public final class RequestContext implements HandshakeRequest, SPIHandshakeReque
     }
 
     /**
-     * Gets the first header value from the {@link List} of header values corresponding to the name.
-     *
-     * @param name header name.
-     * @return {@link String} value iff it exists, {@code null} otherwise.
-     */
-    public String getFirstHeaderValue(String name) {
-        final List<String> stringList = headers.get(name);
-        return stringList == null ? null : stringList.get(0);
-    }
-
-    /**
      * Make headers and parameter map read-only.
      */
     public void lock() {
         this.headers = Collections.unmodifiableMap(headers);
         this.parameterMap = Collections.unmodifiableMap(parameterMap);
-    }
-
-    @Override
-    public void putSingleHeader(String headerName, String headerValue) {
-        headers.put(headerName, Arrays.asList(headerValue));
-    }
-
-    @Override
-    public String getRequestPath() {
-        return requestPath;
-    }
-
-    @Override
-    public void setRequestPath(String requestPath) {
-        this.requestPath = requestPath;
     }
 
     @Override
@@ -208,26 +175,18 @@ public final class RequestContext implements HandshakeRequest, SPIHandshakeReque
         return secure;
     }
 
-    @Override
-    public Connection getConnection() {
-        return connection;
-    }
-
     /**
      * {@link RequestContext} builder.
      */
     public static final class Builder {
 
         private URI requestURI;
-        private String requestPath;
         private String queryString;
-        private Connection connection;
         private Object httpSession;
         private boolean secure;
         private Principal userPrincipal;
         private Builder.IsUserInRoleDelegate isUserInRoleDelegate;
         private Map<String, List<String>> parameterMap;
-
 
         /**
          * Create empty builder.
@@ -257,28 +216,6 @@ public final class RequestContext implements HandshakeRequest, SPIHandshakeReque
          */
         public Builder queryString(String queryString) {
             this.queryString = queryString;
-            return this;
-        }
-
-        /**
-         * Set connection.
-         *
-         * @param connection connection to be set.
-         * @return updated {@link RequestContext.Builder} instance.
-         */
-        public Builder connection(Connection connection) {
-            this.connection = connection;
-            return this;
-        }
-
-        /**
-         * Set request path.
-         *
-         * @param requestPath request path to be set.
-         * @return updated {@link RequestContext.Builder} instance.
-         */
-        public Builder requestPath(String requestPath) {
-            this.requestPath = requestPath;
             return this;
         }
 
@@ -353,7 +290,7 @@ public final class RequestContext implements HandshakeRequest, SPIHandshakeReque
          * @return created {@link RequestContext}.
          */
         public RequestContext build() {
-            return new RequestContext(requestURI, requestPath, queryString, connection, httpSession, secure,
+            return new RequestContext(requestURI, queryString, httpSession, secure,
                     userPrincipal, isUserInRoleDelegate,
                     parameterMap != null ? parameterMap : new HashMap<String, List<String>>());
         }

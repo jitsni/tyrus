@@ -73,7 +73,7 @@ import org.junit.Test;
 public class AsyncObjectTest {
 
     private static final int MESSAGE_NO = 100;
-    private final String CONTEXT_PATH = "/servlet-test/async";
+    private final String CONTEXT_PATH = "/servlet-test-async";
     private final String DEFAULT_HOST = "localhost";
     private final int DEFAULT_PORT = 8025;
 
@@ -91,7 +91,7 @@ public class AsyncObjectTest {
     private Server startServer() throws DeploymentException {
         final String host = System.getProperty("tyrus.test.host");
         if (host == null) {
-            final Server server = new Server(DEFAULT_HOST, DEFAULT_PORT, CONTEXT_PATH, endpointClasses);
+            final Server server = new Server(DEFAULT_HOST, DEFAULT_PORT, CONTEXT_PATH, null, endpointClasses);
             server.start();
             return server;
         } else {
@@ -193,9 +193,11 @@ public class AsyncObjectTest {
             this.receivedLatch = receivedLatch;
         }
 
+        @Override
         public void onOpen(Session session, EndpointConfig EndpointConfig) {
             try {
                 session.addMessageHandler(new MessageHandler.Whole<Integer>() {
+                    @Override
                     public void onMessage(Integer buf) {
                         receivedLatch.countDown();
                     }
@@ -271,9 +273,11 @@ public class AsyncObjectTest {
             this.receivedLatch = receivedLatch;
         }
 
+        @Override
         public void onOpen(Session session, EndpointConfig EndpointConfig) {
             try {
                 session.addMessageHandler(new MessageHandler.Whole<Integer>() {
+                    @Override
                     public void onMessage(Integer message) {
                         receivedLatch.countDown();
                     }

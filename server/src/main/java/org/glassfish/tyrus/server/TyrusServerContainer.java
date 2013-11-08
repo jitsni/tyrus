@@ -45,25 +45,20 @@ import java.net.URI;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.logging.Logger;
+import java.util.concurrent.Future;
 
 import javax.websocket.ClientEndpointConfig;
 import javax.websocket.DeploymentException;
 import javax.websocket.Endpoint;
-import javax.websocket.EndpointConfig;
 import javax.websocket.Extension;
 import javax.websocket.Session;
-import javax.websocket.WebSocketContainer;
 import javax.websocket.server.ServerApplicationConfig;
 import javax.websocket.server.ServerEndpointConfig;
 
-import org.glassfish.tyrus.core.AnnotatedEndpoint;
+import org.glassfish.tyrus.client.ClientManager;
 import org.glassfish.tyrus.core.BaseContainer;
-import org.glassfish.tyrus.core.ComponentProviderService;
-import org.glassfish.tyrus.core.EndpointWrapper;
 import org.glassfish.tyrus.core.ErrorCollector;
-import org.glassfish.tyrus.spi.SPIRegisteredEndpoint;
-import org.glassfish.tyrus.spi.TyrusServer;
+import org.glassfish.tyrus.spi.ServerContainer;
 
 /**
  * Server Container Implementation.
@@ -72,67 +67,61 @@ import org.glassfish.tyrus.spi.TyrusServer;
  * @author Pavel Bucek (pavel.bucek at oracle.com)
  * @author Stepan Kopriva (stepan.kopriva at oracle.com)
  */
-public class TyrusServerContainer extends BaseContainer implements WebSocketContainer {
-    private final TyrusServer server;
-    private final String contextPath;
-    private final ServerApplicationConfig configuration;
-    private final Set<SPIRegisteredEndpoint> endpoints = new HashSet<SPIRegisteredEndpoint>();
+public abstract class TyrusServerContainer extends BaseContainer implements ServerContainer {
+    //    private final Set<EndpointWrapper> endpoints = new HashSet<EndpointWrapper>();
     private final ErrorCollector collector;
-    private final ComponentProviderService componentProvider;
 
+    private final Set<Class<?>> dynamicallyAddedClasses;
+    private final Set<ServerEndpointConfig> dynamicallyAddedEndpointConfigs;
+    private final Set<Class<?>> classes;
+
+    private boolean canDeploy = true;
     private long defaultMaxSessionIdleTimeout = 0;
     private long defaultAsyncSendTimeout = 0;
     private int maxTextMessageBufferSize = Integer.MAX_VALUE;
     private int maxBinaryMessageBufferSize = Integer.MAX_VALUE;
 
+    private ClientManager clientManager = null;
+
     /**
      * Create new {@link TyrusServerContainer}.
-     *
-     * @param server                  underlying server.
-     * @param contextPath             context path of current application.
-     * @param classes                 classes to be included in this application instance. Can contain any combination of annotated
-     *                                endpoints (see {@link javax.websocket.server.ServerEndpoint}) or {@link javax.websocket.Endpoint} descendants.
-     * @param dynamicallyAddedClasses dynamically deployed classes. See {@link javax.websocket.server.ServerContainer#addEndpoint(Class)}.
-     * @param dynamicallyAddedEndpointConfigs
-     *                                dynamically deployed {@link ServerEndpointConfig ServerEndpointConfigs}. See
-     *                                {@link javax.websocket.server.ServerContainer#addEndpoint(ServerEndpointConfig)}.
+     * <p/>
+     * //     * @param classes                 classes to be included in this application instance. Can contain any combination of annotated
+     * //     *                                endpoints (see {@link javax.websocket.server.ServerEndpoint}) or {@link javax.websocket.Endpoint} descendants.
+     * //     * @param dynamicallyAddedClasses dynamically deployed classes. See {@link javax.websocket.server.ServerContainer#addEndpoint(Class)}.
+     * //     * @param dynamicallyAddedEndpointConfigs
+     * //     *                                dynamically deployed {@link ServerEndpointConfig ServerEndpointConfigs}. See
+     * //     *                                {@link javax.websocket.server.ServerContainer#addEndpoint(ServerEndpointConfig)}.
      */
-    public TyrusServerContainer(final TyrusServer server, final String contextPath,
-                                final Set<Class<?>> classes, final Set<Class<?>> dynamicallyAddedClasses,
-                                final Set<ServerEndpointConfig> dynamicallyAddedEndpointConfigs) {
+    public TyrusServerContainer(Set<Class<?>> classes) {
         this.collector = new ErrorCollector();
-        this.server = server;
-        this.contextPath = contextPath;
-        this.configuration = new TyrusServerConfiguration((classes == null ? Collections.<Class<?>>emptySet() : classes),
-                dynamicallyAddedClasses, dynamicallyAddedEndpointConfigs, this.collector);
-        this.componentProvider = ComponentProviderService.create();
+        this.classes = classes == null ? Collections.<Class<?>>emptySet() : new HashSet<Class<?>>(classes);
+        this.dynamicallyAddedClasses = new HashSet<Class<?>>();
+        this.dynamicallyAddedEndpointConfigs = new HashSet<ServerEndpointConfig>();
     }
 
     /**
      * Start container.
      *
-     * @throws IOException         when any IO related issues emerge during {@link org.glassfish.tyrus.spi.TyrusServer#start()}.
+     * @throws IOException         when any IO related issues emerge during {@link org.glassfish.tyrus.spi.ServerContainer#start(String, int)}.
      * @throws DeploymentException when any deployment related error is found; should contain list of all found issues.
      */
-    public void start() throws IOException, DeploymentException {
+    @Override
+    public void start(String rootPath, int port) throws IOException, DeploymentException {
+        ServerApplicationConfig configuration = new TyrusServerConfiguration((classes == null ? Collections.<Class<?>>emptySet() : classes),
+                dynamicallyAddedClasses, dynamicallyAddedEndpointConfigs, this.collector);
+
         // start the underlying server
-        server.start();
         try {
             // deploy all the annotated endpoints
             for (Class<?> endpointClass : configuration.getAnnotatedEndpointClasses(null)) {
-                AnnotatedEndpoint endpoint = AnnotatedEndpoint.fromClass(endpointClass, componentProvider, true, collector);
-                EndpointConfig config = endpoint.getEndpointConfig();
-                EndpointWrapper ew = new EndpointWrapper(endpoint, config, componentProvider, this, contextPath, collector,
-                        config instanceof ServerEndpointConfig ? ((ServerEndpointConfig) config).getConfigurator() : null);
-                deploy(ew);
+                register(endpointClass);
             }
 
             // deploy all the programmatic endpoints
             for (ServerEndpointConfig serverEndpointConfiguration : configuration.getEndpointConfigs(null)) {
                 if (serverEndpointConfiguration != null) {
-                    EndpointWrapper ew = new EndpointWrapper(serverEndpointConfiguration.getEndpointClass(),
-                            serverEndpointConfiguration, componentProvider, this, contextPath, collector, serverEndpointConfiguration.getConfigurator());
-                    deploy(ew);
+                    register(serverEndpointConfiguration);
                 }
             }
         } catch (DeploymentException de) {
@@ -145,41 +134,137 @@ public class TyrusServerContainer extends BaseContainer implements WebSocketCont
         }
     }
 
-    private void deploy(EndpointWrapper wrapper) throws DeploymentException {
-        SPIRegisteredEndpoint ge = server.register(wrapper);
-        endpoints.add(ge);
+    /**
+     * Undeploy all endpoints and stop underlying {@link org.glassfish.tyrus.spi.ServerContainer}.
+     */
+    @Override
+    public void stop() {
+//        for (EndpointWrapper wsa : this.endpoints) {
+//            this.server.unregister(wsa);
+//            Logger.getLogger(getClass().getName()).fine("Closing down : " + wsa);
+//        }
+//        server.stop();
+    }
+
+    public abstract void register(Class<?> endpointClass) throws DeploymentException;
+
+    public abstract void register(ServerEndpointConfig serverEndpointConfig) throws DeploymentException;
+
+    @Override
+    public void addEndpoint(Class<?> endpointClass) throws DeploymentException {
+        if (canDeploy) {
+            dynamicallyAddedClasses.add(endpointClass);
+        } else {
+            throw new IllegalStateException("Not in 'deploy' scope.");
+        }
+    }
+
+    @Override
+    public void addEndpoint(ServerEndpointConfig serverEndpointConfig) throws DeploymentException {
+        if (canDeploy) {
+            dynamicallyAddedEndpointConfigs.add(serverEndpointConfig);
+        } else {
+            throw new IllegalStateException("Not in 'deploy' scope.");
+        }
     }
 
     /**
-     * Undeploy all endpoints and stop underlying {@link TyrusServer}.
+     * Can be overridden to provide own {@link ClientManager} implementation or instance.
+     *
+     * @return {@link ClientManager} associated with this server container.
      */
-    public void stop() {
-        for (SPIRegisteredEndpoint wsa : this.endpoints) {
-            wsa.remove();
-            this.server.unregister(wsa);
-            Logger.getLogger(getClass().getName()).fine("Closing down : " + wsa);
+    protected synchronized ClientManager getClientManager() {
+        if (clientManager == null) {
+            clientManager = ClientManager.createClient(this);
         }
-        server.stop();
+
+        return clientManager;
     }
 
     @Override
-    public Session connectToServer(Class annotatedEndpointClass, URI path) throws DeploymentException {
-        throw new UnsupportedOperationException();
+    public Session connectToServer(Class annotatedEndpointClass, URI path) throws DeploymentException, IOException {
+        return getClientManager().connectToServer(annotatedEndpointClass, path);
     }
 
     @Override
-    public Session connectToServer(Class<? extends Endpoint> endpointClass, ClientEndpointConfig cec, URI path) throws DeploymentException {
-        throw new UnsupportedOperationException();
+    public Session connectToServer(Class<? extends Endpoint> endpointClass, ClientEndpointConfig cec, URI path) throws DeploymentException, IOException {
+        return getClientManager().connectToServer(endpointClass, cec, path);
     }
 
     @Override
     public Session connectToServer(Object annotatedEndpointInstance, URI path) throws DeploymentException, IOException {
-        throw new UnsupportedOperationException();
+        return getClientManager().connectToServer(annotatedEndpointInstance, path);
     }
 
     @Override
     public Session connectToServer(Endpoint endpointInstance, ClientEndpointConfig cec, URI path) throws DeploymentException, IOException {
-        throw new UnsupportedOperationException();
+        return getClientManager().connectToServer(endpointInstance, cec, path);
+    }
+
+    /**
+     * Non-blocking version of {@link javax.websocket.WebSocketContainer#connectToServer(Class, java.net.URI)}.
+     * <p/>
+     * Only simple checks are performed in the main thread; client container is created in different thread, same
+     * applies to connecting etc.
+     *
+     * @param annotatedEndpointClass the annotated websocket client endpoint.
+     * @param path                   the complete path to the server endpoint.
+     * @return Future for the Session created if the connection is successful.
+     * @throws DeploymentException if the class is not a valid annotated endpoint class.
+     */
+    public Future<Session> asyncConnectToServer(Class<?> annotatedEndpointClass, URI path) throws DeploymentException {
+        return getClientManager().asyncConnectToServer(annotatedEndpointClass, path);
+    }
+
+    /**
+     * Non-blocking version of {@link javax.websocket.WebSocketContainer#connectToServer(Class, javax.websocket.ClientEndpointConfig, java.net.URI)}.
+     * <p/>
+     * Only simple checks are performed in the main thread; client container is created in different thread, same
+     * applies to connecting etc.
+     *
+     * @param endpointClass the programmatic client endpoint class {@link Endpoint}.
+     * @param path          the complete path to the server endpoint.
+     * @param cec           the configuration used to configure the programmatic endpoint.
+     * @return the Session created if the connection is successful.
+     * @throws DeploymentException if the configuration is not valid
+     * @see javax.websocket.WebSocketContainer#connectToServer(Class, javax.websocket.ClientEndpointConfig, java.net.URI)
+     */
+    public Future<Session> asyncConnectToServer(Class<? extends Endpoint> endpointClass, ClientEndpointConfig cec, URI path) throws DeploymentException {
+        return getClientManager().asyncConnectToServer(endpointClass, cec, path);
+    }
+
+    /**
+     * Non-blocking version of {@link javax.websocket.WebSocketContainer#connectToServer(javax.websocket.Endpoint, javax.websocket.ClientEndpointConfig, java.net.URI)}.
+     * <p/>
+     * Only simple checks are performed in the main thread; client container is created in different thread, same
+     * applies to connecting etc.
+     *
+     * @param endpointInstance the programmatic client endpoint instance {@link Endpoint}.
+     * @param path             the complete path to the server endpoint.
+     * @param cec              the configuration used to configure the programmatic endpoint.
+     * @return the Session created if the connection is successful.
+     * @throws DeploymentException if the configuration is not valid
+     * @see javax.websocket.WebSocketContainer#connectToServer(javax.websocket.Endpoint, javax.websocket.ClientEndpointConfig, java.net.URI)
+     */
+    public Future<Session> asyncConnectToServer(Endpoint endpointInstance, ClientEndpointConfig cec, URI path) throws DeploymentException {
+        return getClientManager().asyncConnectToServer(endpointInstance, cec, path);
+    }
+
+    /**
+     * Non-blocking version of {@link javax.websocket.WebSocketContainer#connectToServer(Object, java.net.URI)}.
+     * <p/>
+     * Only simple checks are performed in the main thread; client container is created in different thread, same
+     * applies to connecting etc.
+     *
+     * @param obj  the annotated websocket client endpoint
+     *             instance.
+     * @param path the complete path to the server endpoint.
+     * @return the Session created if the connection is successful.
+     * @throws DeploymentException if the annotated endpoint instance is not valid.
+     * @see javax.websocket.WebSocketContainer#connectToServer(Object, java.net.URI)
+     */
+    public Future<Session> asyncConnectToServer(Object obj, URI path) throws DeploymentException {
+        return getClientManager().asyncConnectToServer(obj, path);
     }
 
     @Override
@@ -228,5 +313,13 @@ public class TyrusServerContainer extends BaseContainer implements WebSocketCont
     @Override
     public void setDefaultMaxSessionIdleTimeout(long defaultMaxSessionIdleTimeout) {
         this.defaultMaxSessionIdleTimeout = defaultMaxSessionIdleTimeout;
+    }
+
+    /**
+     * Container is no longer required to accept {@link #addEndpoint(javax.websocket.server.ServerEndpointConfig)} and
+     * {@link #addEndpoint(Class)} calls.
+     */
+    public void doneDeployment() {
+        canDeploy = false;
     }
 }

@@ -51,20 +51,25 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import javax.websocket.ClientEndpointConfig;
 import javax.websocket.CloseReason;
 import javax.websocket.DeploymentException;
+import javax.websocket.EncodeException;
 import javax.websocket.Endpoint;
 import javax.websocket.Extension;
 import javax.websocket.OnMessage;
+import javax.websocket.SendHandler;
+import javax.websocket.SendResult;
 import javax.websocket.Session;
 import javax.websocket.server.ServerEndpoint;
 
-import org.glassfish.tyrus.spi.SPIRemoteEndpoint;
-import org.glassfish.tyrus.websockets.DataFrame;
+import org.glassfish.tyrus.spi.RemoteEndpoint;
 
 import org.junit.Assert;
 import org.junit.Test;
@@ -78,13 +83,13 @@ public class RemoteEndpointWrapperTest {
 
     private final byte[] sentBytes = {'a', 'b', 'c'};
     private final byte[] sentBytesComplete = {'a', 'b', 'c', 'a', 'b', 'c'};
-    private final EndpointWrapper ew = new EndpointWrapper(EchoEndpoint.class, null,null, new TestContainer() ,null, null, null);
+    private final TyrusEndpointWrapper ew = new TyrusEndpointWrapper(EchoEndpoint.class, null, null, new TestContainer(), null, null);
 
     @Test
     public void testGetSendStream() throws IOException {
 
         TestRemoteEndpoint tre = new TestRemoteEndpoint();
-        SessionImpl testSession = new SessionImpl(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
         RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
         OutputStream stream = rew.getSendStream();
 
@@ -106,7 +111,7 @@ public class RemoteEndpointWrapperTest {
     public void testGetSendStreamWriteArrayWhole() throws IOException {
 
         TestRemoteEndpoint tre = new TestRemoteEndpoint();
-        SessionImpl testSession = new SessionImpl(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
         RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
         OutputStream stream = rew.getSendStream();
 
@@ -122,7 +127,7 @@ public class RemoteEndpointWrapperTest {
     public void testGetSendStreamWriteArrayPerPartes() throws IOException {
 
         TestRemoteEndpoint tre = new TestRemoteEndpoint();
-        SessionImpl testSession = new SessionImpl(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
         RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
         OutputStream stream = rew.getSendStream();
 
@@ -143,7 +148,7 @@ public class RemoteEndpointWrapperTest {
 
         char[] toSend = sentString.toCharArray();
         TestRemoteEndpoint tre = new TestRemoteEndpoint();
-        SessionImpl testSession = new SessionImpl(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
         RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
         Writer writer = rew.getSendWriter();
 
@@ -160,37 +165,236 @@ public class RemoteEndpointWrapperTest {
         Assert.assertEquals("Writing first character.", String.valueOf(toSend[2]), tre.getStringAndCleanBuilder());
     }
 
+    @Test(expected = IllegalArgumentException.class)
+    public void testBasicSendText() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
 
-    private class TestRemoteEndpoint extends SPIRemoteEndpoint {
+        rew.sendText(null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBasicSendBinary() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
+
+        rew.sendBinary(null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBasicSendPartialText() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
+
+        rew.sendText(null, false);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBasicSendPartialBinary() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
+
+        rew.sendBinary(null, false);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testBasicSendObject() throws IOException, EncodeException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Basic rew = new RemoteEndpointWrapper.Basic(testSession, tre, ew);
+
+        rew.sendObject(null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendTextHandler1() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendText(null, new SendHandler() {
+            @Override
+            public void onResult(SendResult result) {
+                // do nothing.
+            }
+        });
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendTextHandler2() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendText("We are all here to do what we are all here to do...", null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendTextFuture() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendText(null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendBinaryHandler1() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendBinary(null, new SendHandler() {
+            @Override
+            public void onResult(SendResult result) {
+                // do nothing.
+            }
+        });
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendBinaryHandler2() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendBinary(ByteBuffer.wrap("We are all here to do what we are all here to do...".getBytes("UTF-8")), null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendBinaryFuture() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendBinary(null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendObjectHandler1() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendObject(null, new SendHandler() {
+            @Override
+            public void onResult(SendResult result) {
+                // do nothing.
+            }
+        });
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendObjectHandler2() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendObject("We are all here to do what we are all here to do...", null);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAsyncSendObjectFuture() throws IOException {
+        TestRemoteEndpoint tre = new TestRemoteEndpoint();
+        TyrusSession testSession = new TyrusSession(null, tre, ew, null, null, true, null, null, Collections.<String, String>emptyMap(), null, new HashMap<String, List<String>>());
+        RemoteEndpointWrapper.Async rew = new RemoteEndpointWrapper.Async(testSession, tre, ew);
+
+        rew.sendObject(null);
+    }
+
+
+    private class TestRemoteEndpoint extends RemoteEndpoint {
 
         private final ArrayList<Byte> bytesToSend = new ArrayList<Byte>();
         StringBuilder builder = new StringBuilder();
         private int lastSentMessageSize;
 
         @Override
-        public Future<DataFrame> sendText(String text) throws IOException {
+        public Future<DataFrame> sendText(String text) {
             return null;
         }
 
         @Override
-        public Future<DataFrame> sendBinary(ByteBuffer data) throws IOException {
+        public Future<DataFrame> sendBinary(ByteBuffer data) {
             return null;
         }
 
         @Override
-        public Future<DataFrame> sendText(String fragment, boolean isLast) throws IOException {
+        public void sendText(String text, SendHandler handler) {
+        }
+
+        @Override
+        public void sendBinary(ByteBuffer data, SendHandler handler) {
+        }
+
+        @Override
+        public Future<DataFrame> sendText(String fragment, boolean isLast) {
             builder.append(fragment);
-            return null;
+            return new Future<DataFrame>() {
+                @Override
+                public boolean cancel(boolean mayInterruptIfRunning) {
+                    return false;
+                }
+
+                @Override
+                public boolean isCancelled() {
+                    return false;
+                }
+
+                @Override
+                public boolean isDone() {
+                    return true;
+                }
+
+                @Override
+                public DataFrame get() throws InterruptedException, ExecutionException {
+                    return null;
+                }
+
+                @Override
+                public DataFrame get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+                    return null;
+                }
+            };
         }
 
         @Override
-        public Future<DataFrame> sendBinary(ByteBuffer partialByte, boolean isLast) throws IOException {
+        public Future<DataFrame> sendBinary(ByteBuffer partialByte, boolean isLast) {
             byte[] bytes = partialByte.array();
             lastSentMessageSize = bytes.length;
             for (byte b : bytes) {
                 bytesToSend.add(b);
             }
-            return null;
+            return new Future<DataFrame>() {
+                @Override
+                public boolean cancel(boolean mayInterruptIfRunning) {
+                    return false;
+                }
+
+                @Override
+                public boolean isCancelled() {
+                    return false;
+                }
+
+                @Override
+                public boolean isDone() {
+                    return true;
+                }
+
+                @Override
+                public DataFrame get() throws InterruptedException, ExecutionException {
+                    return null;
+                }
+
+                @Override
+                public DataFrame get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
+                    return null;
+                }
+            };
         }
 
         @Override
@@ -244,7 +448,7 @@ public class RemoteEndpointWrapperTest {
         }
     }
 
-    private static class TestContainer extends BaseContainer{
+    private static class TestContainer extends BaseContainer {
 
         @Override
         public long getDefaultAsyncSendTimeout() {
@@ -308,7 +512,7 @@ public class RemoteEndpointWrapperTest {
 
         @Override
         public Set<Extension> getInstalledExtensions() {
-            return null;
+            return Collections.emptySet();
         }
 
         @Override

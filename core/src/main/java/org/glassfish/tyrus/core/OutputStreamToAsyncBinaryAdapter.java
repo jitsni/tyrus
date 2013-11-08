@@ -43,8 +43,10 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 
-import org.glassfish.tyrus.spi.SPIRemoteEndpoint;
+import org.glassfish.tyrus.spi.RemoteEndpoint;
 
 /**
  * Simple Writer that writes its data to
@@ -52,10 +54,10 @@ import org.glassfish.tyrus.spi.SPIRemoteEndpoint;
  *
  * @author Danny Coward (danny.coward at oracle.com)
  */
-public class OutputStreamToAsyncBinaryAdapter extends OutputStream {
-    private final SPIRemoteEndpoint re;
+class OutputStreamToAsyncBinaryAdapter extends OutputStream {
+    private final RemoteEndpoint re;
 
-    public OutputStreamToAsyncBinaryAdapter(SPIRemoteEndpoint re) {
+    public OutputStreamToAsyncBinaryAdapter(RemoteEndpoint re) {
         this.re = re;
     }
 
@@ -71,14 +73,27 @@ public class OutputStreamToAsyncBinaryAdapter extends OutputStream {
         }
 
         ByteBuffer result = ByteBuffer.allocate(len);
-        result.put(Arrays.copyOfRange(b,off,len));
+        result.put(Arrays.copyOfRange(b, off, len));
         result.flip();
-        re.sendBinary(result, false);
+        final Future<?> future = re.sendBinary(result, false);
+        try {
+            future.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException) {
+                throw (IOException) e.getCause();
+            } else {
+                throw new IOException(e.getCause());
+            }
+        }
     }
 
     @Override
     public void write(int i) throws IOException {
-        re.sendBinary(ByteBuffer.wrap(new byte[]{(byte) i}), false);
+        byte[] byteArray = new byte[]{(byte) i};
+
+        write(byteArray, 0, byteArray.length);
     }
 
     @Override

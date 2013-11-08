@@ -53,7 +53,7 @@ import java.util.concurrent.TimeoutException;
  * @author Martin Matula (martin.matula at oracle.com)
  * @author Stepan Kopriva (stepan.kopriva at oracle.com)
  */
-public class FutureSendResult implements Future<Void> {
+class FutureSendResult implements Future<Void> {
 
     private final CountDownLatch latch = new CountDownLatch(1);
     private volatile Throwable throwable = null;
@@ -86,7 +86,11 @@ public class FutureSendResult implements Future<Void> {
 
     @Override
     public Void get(long timeout, TimeUnit unit) throws InterruptedException, ExecutionException, TimeoutException {
-        return get();
+        if (latch.await(timeout, unit) && throwable != null) {
+            throw new ExecutionException(throwable);
+        }
+
+        return null;
     }
 
     /**

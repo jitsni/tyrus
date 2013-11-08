@@ -46,7 +46,7 @@
     <parent>
         <groupId>org.glassfish.tyrus</groupId>
         <artifactId>tyrus-containers-glassfish-project</artifactId>
-        <version>1.3-SNAPSHOT</version>
+        <version>1.4-SNAPSHOT</version>
     </parent>
 
     <packaging>jar</packaging>
@@ -58,7 +58,7 @@
     <dependencies>
         <dependency>
             <groupId>org.glassfish.tyrus</groupId>
-            <artifactId>tyrus-spi</artifactId>
+            <artifactId>tyrus-core</artifactId>
         </dependency>
         <dependency>
             <groupId>javax.ejb</groupId>

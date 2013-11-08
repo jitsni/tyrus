@@ -44,15 +44,22 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.logging.Logger;
 
+import javax.websocket.DeploymentException;
 import javax.websocket.Endpoint;
 import javax.websocket.server.ServerApplicationConfig;
+import javax.websocket.server.ServerContainer;
 import javax.websocket.server.ServerEndpoint;
+import javax.websocket.server.ServerEndpointConfig;
 
 import javax.servlet.FilterRegistration;
 import javax.servlet.ServletContainerInitializer;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.annotation.HandlesTypes;
+
+import org.glassfish.tyrus.core.TyrusWebSocketEngine;
+import org.glassfish.tyrus.server.TyrusServerContainer;
+import org.glassfish.tyrus.spi.WebSocketEngine;
 
 /**
  * Registers a filter for upgrade handshake.
@@ -74,14 +81,37 @@ public class TyrusServletContainerInitializer implements ServletContainerInitial
         add(org.glassfish.tyrus.server.TyrusServerConfiguration.class);
     }};
 
-    public void onStartup(Set<Class<?>> classes, ServletContext ctx) throws ServletException {
+    @Override
+    public void onStartup(Set<Class<?>> classes, final ServletContext ctx) throws ServletException {
         if (classes == null || classes.isEmpty()) {
             return;
         }
 
         classes.removeAll(FILTERED_CLASSES);
-        TyrusServletFilter filter = ctx.createFilter(TyrusServletFilter.class);
-        filter.setClasses(classes);
+
+        final TyrusServerContainer serverContainer = new TyrusServerContainer(classes) {
+
+            private final WebSocketEngine engine = new TyrusWebSocketEngine(this);
+
+            @Override
+            public void register(Class<?> endpointClass) throws DeploymentException {
+                engine.register(endpointClass, ctx.getContextPath());
+            }
+
+            @Override
+            public void register(ServerEndpointConfig serverEndpointConfig) throws DeploymentException {
+                engine.register(serverEndpointConfig, ctx.getContextPath());
+            }
+
+            @Override
+            public WebSocketEngine getWebSocketEngine() {
+                return engine;
+            }
+        };
+        ctx.setAttribute(ServerContainer.class.getName(), serverContainer);
+
+        // TODO
+        TyrusServletFilter filter = new TyrusServletFilter((TyrusWebSocketEngine)serverContainer.getWebSocketEngine());
 
         // HttpSessionListener registration
         ctx.addListener(filter);
@@ -92,7 +122,5 @@ public class TyrusServletContainerInitializer implements ServletContainerInitial
         reg.addMappingForUrlPatterns(null, true, "/*");
         LOGGER.info("Registering WebSocket filter for url pattern /*");
 
-        final TyrusServletServerContainer serverContainer = new TyrusServletServerContainer(filter);
-        ctx.setAttribute(TyrusServletServerContainer.SERVER_CONTAINER_ATTRIBUTE, serverContainer);
     }
 }
